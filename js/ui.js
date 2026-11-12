@@ -114,6 +114,7 @@ function saveRecord(g) {
   store.set('game.' + g.id, {
     id: g.id, side: g.side, secret: g.secret, code: g.code, n: g.log.n,
     status: g.status, turn: g.T, result: g.result || null, updated: Date.now(),
+    bot: g.bot || null,
   });
 }
 
@@ -134,7 +135,7 @@ async function openCode(code) {
     } catch (e) { /* ignore a bad stored copy */ }
   }
   if (rec) {
-    G = makeGame(log, rec.side, rec.secret, code);
+    G = makeGame(log, rec.side, rec.secret, code, rec.bot);
   } else if (log.c.length === 1 && log.t.length === 1) {
     G = makeGame(log, 1, null, code);
     G.joining = true;
@@ -143,14 +144,16 @@ async function openCode(code) {
     G.spectator = true;
   }
   G.notice = notice;
-  if (log.v !== RULES_VERSION) G.versionWarn = true;
+  if ((log.v || 1) > RULES_VERSION) G.versionWarn = true;
   if (!G.spectator && !G.joining && !(notice && notice.kind === 'old')) saveRecord(G);
   view = G.joining ? 'join' : 'game';
   render();
+  if (G.bot && G.status === 'bot') runBot();
 }
 
-function makeGame(log, side, secret, code) {
-  const g = { id: log.id, log, side, secret, code, acts: [], pend: null, mode: null, recap: true };
+// bot = { secret, deck } for games against the computer, which live only on this phone.
+function makeGame(log, side, secret, code, bot = null) {
+  const g = { id: log.id, log, side, secret, code, bot, acts: [], pend: null, mode: null, recap: true };
   compute(g);
   return g;
 }
@@ -166,12 +169,12 @@ function compute(g) {
   const st = g.base.st;
   if (g.spectator || g.joining) g.status = g.joining ? 'join' : 'watch';
   else if ((last && !last.a) || (st.over && !g.base.pending)) g.status = 'over';
-  else if (g.base.pending) g.status = 'wait';
-  else g.status = g.T % 2 === g.side ? 'my' : 'wait';
+  else if (g.base.pending) g.status = g.bot ? 'bot' : 'wait';
+  else g.status = g.T % 2 === g.side ? 'my' : g.bot ? 'bot' : 'wait';
   g.result = st.over && !g.base.pending ? (st.over.winner === null ? 'draw' : st.over.winner === g.side ? 'won' : 'lost') : null;
   // Fair play check once both decks are revealed.
   g.verify = null;
-  if (g.secret && g.log.x && g.log.x[o]) {
+  if (g.secret && g.log.x && g.log.x[o] && !g.bot) {
     const xo = g.log.x[o];
     const sealOk = g.log.c[o] && deckCommit(xo.seed, xo.deck) === g.log.c[o] && validDeck(xo.deck);
     const issues = [...g.base.st.warn];
@@ -211,7 +214,7 @@ function render() {
   document.body.dataset.view = view;
   const html = {
     home: renderHome, decks: renderDecks, edit: renderEdit, rules: renderRules,
-    new: renderNew, join: renderJoin, game: renderGame, sent: renderSent,
+    new: renderNew, join: renderJoin, game: renderGame, sent: renderSent, bot: renderBotSetup,
   }[view]();
   $app.innerHTML = html;
   renderSheet();
@@ -226,12 +229,12 @@ function renderHome() {
   const recs = ids.map(gameRecord).filter(Boolean).sort((a, b) => b.updated - a.updated);
   const label = r => {
     if (r.status === 'over') return r.result === 'won' ? ['You won', 'done'] : r.result === 'lost' ? ['You lost', 'done'] : ['Finished', 'done'];
-    if (r.status === 'my') return ['Your move', 'live'];
+    if (r.status === 'my' || r.status === 'bot') return ['Your move', 'live'];
     return ['Waiting', 'idle'];
   };
   const rows = recs.map(r => {
     const [txt, cls] = label(r);
-    const them = r.n[1 - r.side] || 'Waiting for opponent';
+    const them = r.bot ? `the bot · ${r.bot.deckName}` : r.n[1 - r.side] || 'Waiting for opponent';
     const turn = Math.min(5, Math.floor((r.turn || 0) / 2) + 1);
     return `<li><button class="game-row" data-open="${esc(r.id)}">
       <span class="gr-name">vs ${esc(them)}</span>
@@ -242,7 +245,7 @@ function renderHome() {
     <div class="airmail-rule" aria-hidden="true"></div>
     <div class="mast-wrap">${engraving('dispatch').rosette}<h1 class="mast">Dispatch</h1></div>
     <p class="lede">A five-turn card duel you play by text. Take your turn, send the link, wait for theirs.</p>
-    <div class="btn-row"><button class="btn primary" data-go="new">New game</button><button class="btn" data-go="decks">Decks</button><button class="btn" data-go="rules">Cards &amp; rules</button></div>
+    <div class="btn-row"><button class="btn primary" data-go="new">New game</button><button class="btn" data-go="bot">Play the bot</button><button class="btn" data-go="decks">Decks</button><button class="btn" data-go="rules">Cards &amp; rules</button></div>
     <section class="block">
       <h2 class="eyebrow">Your games</h2>
       ${rows ? `<ul class="game-list">${rows}</ul>` : `<p class="muted">No games yet. Start one and text the link to your opponent.</p>`}
@@ -334,6 +337,22 @@ function renderNew() {
   </main>`;
 }
 
+function renderBotSetup() {
+  return `${topbar()}<main class="page">
+    <h1 class="title">Play the bot</h1>
+    <p class="muted">A practice game on this phone. The bot plays one of the starter decks and can’t see your hand or your traps.</p>
+    ${deckPicker()}
+    <fieldset class="deck-pick"><legend class="eyebrow">Bot’s deck</legend>
+      <div class="seg">${['Random', ...PRESET_DECKS.map(d => d.name)].map((n, i) =>
+        `<label><input type="radio" name="botdeck" value="${i - 1}" ${i === 0 ? 'checked' : ''}><span>${esc(n)}</span></label>`).join('')}</div>
+    </fieldset>
+    <fieldset class="deck-pick"><legend class="eyebrow">Who goes first</legend>
+      <div class="seg"><label><input type="radio" name="first" value="0" checked><span>You</span></label><label><input type="radio" name="first" value="1"><span>The bot</span></label></div>
+    </fieldset>
+    <button class="btn primary block-btn" data-act="start-bot">Start</button>
+  </main>`;
+}
+
 function renderJoin() {
   const g = G;
   return `${topbar()}<main class="page">
@@ -404,7 +423,7 @@ function seals(st, side, mine) {
   const ts = st.P[side].traps;
   if (!ts.length) return '';
   return `<div class="seals">${ts.map(t => `<button class="seal" data-trap="${t.uid}" aria-label="${mine && t.id ? esc(CARDS[t.id].name) : `Face-down trap, cost ${t.k}`}">
-    <span class="seal-wax">${t.k}</span>${mine && t.id ? `<span class="seal-name">${esc(CARDS[t.id].name)}${t.id === 'calledshot' ? ` · ${t.x}` : ''}</span>` : ''}</button>`).join('')}</div>`;
+    <span class="seal-wax">${t.k}</span>${mine && t.id ? `<span class="seal-name">${esc(CARDS[t.id].name)}${t.id === 'calledshot' ? ` · ${t.x}` : t.id === 'omen' ? (t.x ? ' · they attack' : ' · they hold') : ''}</span>` : ''}</button>`).join('')}</div>`;
 }
 
 function seat(g, st, side, ctx) {
@@ -426,6 +445,14 @@ function seat(g, st, side, ctx) {
 function statusBanner(g, st) {
   const them = esc(nameOf(g, 1 - g.side));
   if (g.status === 'watch') return `<div class="banner">This game is between ${esc(nameOf(g, 0))} and ${esc(nameOf(g, 1))}. Only the phones that started it can play it.</div>`;
+  if (g.status === 'bot') return `<div class="banner bot-think"><div><b>The bot is taking its turn…</b></div></div>`;
+  if (g.status === 'over' && g.bot) {
+    const o = st.over, me = g.side;
+    const head = o.winner === null ? 'Draw' : o.winner === me ? 'You beat the bot' : 'The bot wins';
+    const how = o.ko ? 'Knockout.' : `After five turns: ${st.P[me].life} to ${st.P[1 - me].life}.`;
+    return `<div class="banner banner-over"><div><div class="result">${head}</div><p>${how} The bot was playing ${esc(g.bot.deckName)}.</p></div>
+      <div class="btn-row"><button class="btn primary" data-act="rematch">Play again</button><button class="btn" data-go="home">Home</button></div></div>`;
+  }
   if (g.status === 'wait') return `<div class="banner"><div><b>Waiting for ${them}.</b> ${g.base.pending ? 'Their hidden traps might still change how your turn played out.' : ''}</div><button class="btn sm" data-act="resend">Send link again</button></div>`;
   if (g.status === 'over') {
     const o = st.over, me = g.side;
@@ -475,7 +502,7 @@ function renderGame() {
     ${recapHtml}
     ${seat(g, st, 1 - me, ctx)}
     ${boardRow(g, st, 1 - me, ctx)}
-    <div class="midline"><span class="postmark" aria-hidden="true"></span>${terrain}${my ? `<span class="pool" aria-label="Resources">${st.pool}<small>resources</small></span>` : ''}</div>
+    <div class="midline"><span class="postmark" aria-hidden="true"></span>${terrain}${my && taxOf(st, me) ? `<span class="taxed">Red Tape: your next card costs ${taxOf(st, me)} more</span>` : ''}${my ? `<span class="pool" aria-label="Resources">${st.pool}<small>resources</small></span>` : ''}</div>
     ${boardRow(g, st, me, ctx)}
     ${seat(g, st, me, ctx)}
     ${g.spectator ? '' : handHtml(g, st)}
@@ -497,8 +524,9 @@ function handHtml(g, st) {
       if (pend.pitched.includes(i)) cls.push('pitched');
     }
     if (CARDS[c].temper && P.temper[c]) tags = `<span class="tag">Tempered ×${P.temper[c]}</span>`;
+    if (c === 'wraith' && P.echo.wraith) tags = `<span class="tag">Returned ×${P.echo.wraith}</span>`;
     const cost = CARDS[c].type === 'unit' || CARDS[c].type === 'spell' ? costOf(st, g.side, c) : undefined;
-    const [atk, hp] = c === 'whelp' ? whelpStats(st, g.side) : [undefined, undefined];
+    const [atk, hp] = CARDS[c].type === 'unit' ? unitStats(st, g.side, c) : [undefined, undefined];
     return cardFace(c, { cls: cls.join(' '), cost: cost ?? undefined, atk, hp, tags, attrs: `data-hand="${i}" role="button" tabindex="0"` });
   }).join('')}${P.found.length ? `<div class="found muted small">Arriving at end of turn: ${P.found.map(c => esc(CARDS[c].name)).join(', ')}</div>` : ''}</section>`;
 }
@@ -507,7 +535,7 @@ function controls(g, st) {
   if (g.mode === 'pay') {
     const p = g.pend, P = st.P[g.side];
     const have = p.pitched.reduce((s, i) => s + CARDS[P.hand[i]].pitch, st.pool);
-    const need = p.k - p.l;
+    const need = payNeed(st, g.side, p);
     const blood = p.kind === 'play' && CARDS[p.c].blood && p.l < p.k;
     return `<div class="controls paybar">
       <div class="pay-msg">Pay <b>${need}</b> · you have <b>${have}</b>. Tap cards to pitch them.</div>
@@ -630,6 +658,8 @@ function toggleDeckCard(id) {
 }
 
 // ---------- my turn: building actions ----------
+// What a pending play still costs: Red Tape adds to plays (not flips); Bloodcost life comes off.
+const payNeed = (st, side, p) => p.k + (p.kind === 'flip' ? 0 : taxOf(st, side)) - p.l;
 function canPay(st, side, k, exceptIdx, blood) {
   if (blood) return true;
   const P = st.P[side];
@@ -653,18 +683,18 @@ function tapHand(i) {
   const C = CARDS[c], buttons = [];
   const full = P.board.length >= MAX_UNITS;
   if (C.type === 'trap') {
-    const ok = canPay(st, g.side, C.cost, i) && P.traps.length < MAX_TRAPS;
+    const ok = canPay(st, g.side, C.cost + taxOf(st, g.side), i) && P.traps.length < MAX_TRAPS;
     buttons.push({ label: `Set face-down · ${C.cost}`, kind: 'primary', disabled: !ok, note: P.traps.length >= MAX_TRAPS ? 'You already have 3 traps' : ok ? '' : 'Not enough to pitch', fn: () => startPend('trap', c, i) });
   } else {
     const k = costOf(st, g.side, c);
-    const ok = canPay(st, g.side, k, i, C.blood) && !(C.type === 'unit' && full);
+    const ok = canPay(st, g.side, k + taxOf(st, g.side), i, C.blood) && !(C.type === 'unit' && full);
     buttons.push({ label: `Play · ${k}`, kind: 'primary', disabled: !ok, note: C.type === 'unit' && full ? 'Your side is full' : ok ? '' : 'Not enough to pitch', fn: () => startPend('play', c, i) });
     if (C.disguise) {
-      const ok2 = canPay(st, g.side, 1, i) && !full;
+      const ok2 = canPay(st, g.side, 1 + taxOf(st, g.side), i) && !full;
       buttons.push({ label: 'Play face-down · 1', disabled: !ok2, note: 'Shows as a blank 2/2', fn: () => startPend('fd', c, i) });
     }
   }
-  const [atk, hp] = c === 'whelp' ? whelpStats(st, g.side) : [undefined, undefined];
+  const [atk, hp] = C.type === 'unit' ? unitStats(st, g.side, c) : [undefined, undefined];
   openSheet(cardSheet(c, { buttons, atk, hp, cost: C.type !== 'trap' ? costOf(st, g.side, c) : undefined }));
 }
 
@@ -686,6 +716,12 @@ function advance() {
       buttons: [0, 1, 2, 3, 4].map(n => ({ label: String(n), fn: () => { p.x = n; closeSheet(); advance(); } })) });
     return;
   }
+  if (p.kind === 'trap' && p.c === 'omen' && p.x === undefined) {
+    openSheet({ title: 'Make your prediction', html: `<p class="muted">On ${esc(nameOf(g, 1 - g.side))}’s next turn, will they attack you directly? If you’re right, you gain ${CARDS.omen.life} life.</p>`,
+      buttons: [{ label: 'They will attack me', fn: () => { p.x = 1; closeSheet(); advance(); } },
+                { label: 'They won’t attack me', fn: () => { p.x = 0; closeSheet(); advance(); } }] });
+    return;
+  }
   if (p.kind === 'play' && C.target && p.tg === undefined) {
     const ts = spellTargets(st, p.c);
     if (!ts.length) { toast('There’s nothing to target.'); return cancel(); }
@@ -701,13 +737,13 @@ function advance() {
     else { g.mode = 'slot'; render(); return; }
   }
   if (p.kind === 'play' && p.c === 'map' && p.pick === undefined) {
-    const opts = mapOptions(g.secret, g.T);
+    const opts = mapOptions(g.secret, g.T, st.v);
     openSheet({ title: 'Choose a card', html: `<p class="muted">It joins your hand at the end of this turn.</p><div class="pick-grid">${opts.map(id => cardFace(id)).join('')}</div>`,
       buttons: opts.map(id => ({ label: CARDS[id].name, fn: () => { p.pick = id; closeSheet(); advance(); } })) });
     return;
   }
   const have = p.pitched.reduce((s, i) => s + CARDS[P.hand[i]].pitch, st.pool);
-  if (have < p.k - p.l) { g.mode = 'pay'; render(); return; }
+  if (have < payNeed(st, g.side, p)) { g.mode = 'pay'; render(); return; }
   commit();
 }
 
@@ -792,10 +828,12 @@ function endTurnSheet() {
   if (st.pool > 0) notes.push(`You have ${st.pool} unspent resource${st.pool > 1 ? 's' : ''}. They’ll be lost.`);
   const idle = st.P[g.side].board.filter(u => !attackBlock(st, u.uid));
   if (idle.length) notes.push(`${idle.length} of your units can still attack.`);
+  const intro = g.bot ? 'The bot takes its turn right after. You can’t change yours after this.'
+    : `Your turn gets sealed into a link for ${esc(nameOf(g, 1 - g.side))}. You can’t change it after this.`;
   openSheet({
     title: 'End your turn?',
-    html: `<p class="muted">Your turn gets sealed into a link for ${esc(nameOf(g, 1 - g.side))}. You can’t change it after this.</p>${notes.map(n => `<p class="note">${esc(n)}</p>`).join('')}`,
-    buttons: [{ label: 'Seal and send', kind: 'primary', fn: sendTurn }],
+    html: `<p class="muted">${intro}</p>${notes.map(n => `<p class="note">${esc(n)}</p>`).join('')}`,
+    buttons: [{ label: g.bot ? 'End turn' : 'Seal and send', kind: 'primary', fn: sendTurn }],
   });
 }
 
@@ -806,7 +844,37 @@ async function sendTurn() {
   const log = structuredClone(g.log);
   const owed = g.base.owed || [];
   log.t.push(owed.length ? { a: acts, r: owed } : { a: acts });
+  if (g.bot) { await saveLocal(log); runBot(); return; }
   await finishSend(log);
+}
+
+// ---------- bot games ----------
+async function saveLocal(log) {
+  const g = G;
+  if (g.bot) {
+    // Once the game is over, reveal both decks so the final board shows everything.
+    const tmp = { ...g, log };
+    compute(tmp);
+    if (tmp.status === 'over') { log.x = [null, null]; log.x[g.side] = g.secret; log.x[1 - g.side] = g.bot.secret; }
+  }
+  g.log = log; g.code = await encodeLog(log); g.acts = []; g.pend = null; g.mode = null; sheet = null;
+  compute(g);
+  saveRecord(g);
+  history.replaceState(null, '', '#' + g.code);
+  render();
+}
+let botBusy = false;
+function runBot() {
+  const g = G;
+  if (botBusy || !g || !g.bot) return;
+  botBusy = true;
+  setTimeout(async () => {
+    try {
+      const next = botRespond(g.log, 1 - g.side, g.bot.secret);
+      if (next && G === g) { g.recap = true; await saveLocal(next); }
+    } finally { botBusy = false; }
+    if (G === g && g.status === 'bot') runBot();
+  }, 650);
 }
 async function sendFinal() {
   const g = G, me = g.side;
@@ -895,6 +963,24 @@ document.addEventListener('click', async e => {
         const decks = savedDecks(); decks.splice(editDeck.index, 1); store.set('decks', decks); go('decks');
       } }] });
       break;
+    case 'start-bot': {
+      const mine = { seed: randomSeed(), deck: chosenDeck() };
+      const pickVal = +document.querySelector('input[name=botdeck]:checked').value;
+      const preset = pickVal >= 0 ? PRESET_DECKS[pickVal] : PRESET_DECKS[Math.floor(Math.random() * PRESET_DECKS.length)];
+      const bot = { secret: { seed: randomSeed(), deck: preset.cards.slice() }, deckName: preset.name };
+      const side = +document.querySelector('input[name=first]:checked').value;
+      const name = store.get('name', '') || 'You';
+      const n = side === 0 ? [name, 'Bot'] : ['Bot', name];
+      const c = side === 0 ? [deckCommit(mine.seed, mine.deck), deckCommit(bot.secret.seed, bot.secret.deck)]
+                           : [deckCommit(bot.secret.seed, bot.secret.deck), deckCommit(mine.seed, mine.deck)];
+      const log = { v: RULES_VERSION, id: 'bot' + randomSeed().slice(0, 8), n, c, t: [], x: [null, null] };
+      G = makeGame(log, side, mine, await encodeLog(log), bot);
+      saveRecord(G);
+      history.replaceState(null, '', '#' + G.code);
+      view = 'game'; render(); window.scrollTo(0, 0);
+      if (G.status === 'bot') runBot();
+      break;
+    }
     case 'start': {
       const name = (document.getElementById('my-name').value || 'Player 1').trim().slice(0, 16);
       store.set('name', name);
@@ -920,6 +1006,7 @@ document.addEventListener('click', async e => {
       view = 'game'; render(); window.scrollTo(0, 0);
       break;
     }
+    case 'rematch': go('bot'); break;
     case 'undo': G.acts.pop(); render(); break;
     case 'end': endTurnSheet(); break;
     case 'cancel': cancel(); break;

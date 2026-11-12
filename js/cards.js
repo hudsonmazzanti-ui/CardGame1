@@ -19,7 +19,7 @@
   Bump RULES_VERSION whenever you change a number, so old game links
   keep playing with the rules they started with.
 */
-const RULES_VERSION = 1;
+const RULES_VERSION = 2;   // 2: added the eight "since: 2" cards
 
 const CARDS = {
   // Forge — cards that grow when you pitch them
@@ -82,8 +82,29 @@ const CARDS = {
   map:        { name: "Scavenger's Map", type: 'spell', cost: 1, pitch: 1,
                 text: "Choose 1 of 3 random cards that aren't in your deck. It joins your hand at the end of your turn." },
 
+  // ----- Set 2 -----
+  // Forge
+  apprentice: { name: 'Forgehand Apprentice', type: 'unit', cost: 1, pitch: 1, atk: 1, hp: 3, since: 2,
+                text: 'Whenever you pitch a card, gains +1 attack this turn.' },
+  drake:      { name: 'Bellows Drake', type: 'unit', cost: 2, pitch: 2, atk: 2, hp: 2, temper: 1, since: 2,
+                text: 'Temper: +{temper}/+{temper}. Has Rush once it has been Tempered.' },
+  greatforge: { name: 'The Great Forge', type: 'spell', terrain: true, cost: 1, pitch: 1, since: 2,
+                text: 'Terrain. Pitching a card Tempers it twice.' },
+  hone:       { name: 'Hone', type: 'spell', cost: 1, pitch: 2, bonus: 2, temper: 1, target: 'own', since: 2,
+                text: 'One of your units gets +{bonus} attack. Temper: +{temper} more.' },
+
+  // Memory and mind games
+  wraith:     { name: 'Echo Wraith', type: 'unit', cost: 2, pitch: 1, atk: 2, hp: 2, since: 2,
+                text: 'When it dies, it goes to the bottom of your deck and comes back +1/+1 stronger each time.' },
+  omen:       { name: 'Omen', type: 'trap', cost: 1, pitch: 1, life: 4, since: 2,
+                text: 'When set, predict whether your opponent attacks you on their next turn. If you’re right, gain {life} life at the end of it.' },
+  tape:       { name: 'Red Tape', type: 'spell', cost: 1, pitch: 1, tax: 2, since: 2,
+                text: 'The first card your opponent plays next turn costs {tax} more.' },
+  sender:     { name: 'Return to Sender', type: 'trap', cost: 2, pitch: 1, since: 2,
+                text: 'When an enemy unit attacks you, return it to its owner’s hand instead.' },
+
   // Token
-  hex:        { name: 'Hex', type: 'hex', cost: 1, pitch: 0, life: 2, token: true,
+  hex:       { name: 'Hex', type: 'hex', cost: 1, pitch: 0, life: 2, token: true,
                 text: "Can't be pitched. Play it to get rid of it. If it's in your hand at the end of your turn, lose {life} life." },
 };
 
@@ -102,6 +123,8 @@ const PRESET_DECKS = [
   { name: 'Blood Rush',    cards: ['knight', 'zealot', 'bloodprice', 'quickstep', 'lancer', 'curtain', 'whelp', 'whetstone', 'wyrm', 'calledshot'] },
   { name: 'Masquerade',    cards: ['assassin', 'doppel', 'calledshot', 'pitfall', 'reflect', 'turncoat', 'witch', 'map', 'whelp', 'aegis'] },
   { name: 'The Long Game', cards: ['titan', 'sergeant', 'feeder', 'pass', 'field', 'witch', 'bloodprice', 'pitfall', 'aegis', 'whetstone'] },
+  { name: 'Foundry',       cards: ['apprentice', 'drake', 'greatforge', 'hone', 'whelp', 'golem', 'whetstone', 'aegis', 'wraith', 'sender'] },
+  { name: 'Red Tape',      cards: ['tape', 'omen', 'calledshot', 'sender', 'wraith', 'sergeant', 'zealot', 'lancer', 'curtain', 'map'] },
 ];
 
 function cardText(id) {

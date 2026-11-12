@@ -48,24 +48,30 @@ function shuffled(arr, r) {
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 }
-const mapOptions = (secret, turn) =>
-  shuffled(POOL.filter(id => !secret.deck.includes(id)), rngFor(secret.seed, 'map|' + turn)).slice(0, 3);
+// Cards a game of rules version v can use (cards added later are marked `since`).
+const poolFor = v => POOL.filter(id => (CARDS[id].since || 1) <= v);
+const mapOptions = (secret, turn, v = RULES_VERSION) =>
+  shuffled(poolFor(v).filter(id => !secret.deck.includes(id)), rngFor(secret.seed, 'map|' + turn)).slice(0, 3);
+const taxOf = (st, p) => st.tax[p] || 0;
+// Hidden extra choice sealed with a trap: Called Shot names a cost, Omen predicts an attack.
+const trapChoices = c => (c === 'calledshot' ? [0, 1, 2, 3, 4] : c === 'omen' ? [0, 1] : [null]);
 
 function validDeck(cards) {
   return Array.isArray(cards) && cards.length === 10 && new Set(cards).size === 10 && cards.every(c => POOL.includes(c));
 }
 
 // ---------- state ----------
-function newState(secrets) {
+function newState(secrets, v = RULES_VERSION) {
   return {
-    turn: -1, ai: 0, pool: 0, terrain: null, over: null, attackers: [], ended: false,
+    v, turn: -1, ai: 0, pool: 0, terrain: null, over: null, attackers: [], ended: false,
+    tax: [0, 0], faceAtk: false,
     ev: [], warn: [], reveals: [],
     P: [0, 1].map(i => {
       const sec = secrets[i] || null;
       let deck, hand;
       if (sec) { deck = shuffled(sec.deck, rngFor(sec.seed, 'deck')); hand = deck.splice(0, HAND_SIZE); }
       else { deck = Array(10 - HAND_SIZE).fill('?'); hand = Array(HAND_SIZE).fill('?'); }
-      return { life: START_LIFE, hand, deck, discard: [], board: [], traps: [], temper: {}, held: {}, found: [], sec };
+      return { life: START_LIFE, hand, deck, discard: [], board: [], traps: [], temper: {}, echo: {}, held: {}, found: [], sec };
     }),
   };
 }
@@ -119,6 +125,7 @@ function spellTargets(st, c) {
     case 'any': return ['f', ...units(q), ...units(p)];
     case 'unit': return [...units(q), ...units(p)];
     case 'attacked': return st.P[p].board.filter(u => u.att > 0).map(u => u.uid);
+    case 'own': return st.P[p].board.map(u => u.uid);
   }
   return null;
 }
@@ -175,7 +182,7 @@ function identify(st, p, h, uid, pred) {
   const s = saltFor(P.sec.seed, uid);
   for (const c of new Set(P.hand)) {
     if (c === '?' || !CARDS[c] || !pred(c)) continue;
-    for (const x of c === 'calledshot' ? [0, 1, 2, 3, 4] : [null])
+    for (const x of trapChoices(c))
       if (commitFor(c, x, s) === h) return { c, x, s };
   }
   return null;
@@ -194,9 +201,18 @@ function fire(st, q, id, pred = () => true) {
 const nextUid = st => (st.turn + 1) * 100 + st.ai;
 function mkUnit(st, p, c, uid) {
   const C = CARDS[c];
-  let [atk, hp] = c === 'whelp' ? whelpStats(st, p) : [C.atk, C.hp];
-  return { uid, owner: p, card: c, id: c, fd: false, atk, hp, dmg: 0, sick: true, rush: !!C.rush,
-           att: 0, allow: 1, burrowed: c === 'wyrm', did: false };
+  const [atk, hp] = unitStats(st, p, c);
+  return { uid, owner: p, card: c, id: c, fd: false, atk, hp, dmg: 0, sick: true,
+           rush: !!C.rush || (c === 'drake' && (st.P[p].temper.drake || 0) > 0),
+           att: 0, allow: 1, burrowed: c === 'wyrm', did: false, boost: 0 };
+}
+// Printed stats plus anything the game remembers about this card (Temper, Echo Wraith deaths).
+function unitStats(st, p, c) {
+  const C = CARDS[c], P = st.P[p];
+  if (c === 'whelp') return whelpStats(st, p);
+  if (c === 'drake') { const t = (P.temper.drake || 0) * C.temper; return [C.atk + t, C.hp + t]; }
+  if (c === 'wraith') { const e = P.echo.wraith || 0; return [C.atk + e, C.hp + e]; }
+  return [C.atk, C.hp];
 }
 function deaths(st) {
   for (;;) {
@@ -205,8 +221,13 @@ function deaths(st) {
     if (!dead.length) return;
     for (const [s, u] of dead) {
       st.P[s].board.splice(st.P[s].board.indexOf(u), 1);
-      st.P[u.owner].discard.push(u.card);
       ev(st, s, `{Ps} ${unitName(u)} was destroyed.`, 'die');
+      const O = st.P[u.owner];
+      if (!u.fd && u.card === 'wraith') {
+        O.echo.wraith = (O.echo.wraith || 0) + 1;
+        O.deck.push('wraith');
+        ev(st, u.owner, `Echo Wraith sank to the bottom of {Ps} deck. It will return +${O.echo.wraith}/+${O.echo.wraith}.`);
+      } else O.discard.push(u.card);
     }
     for (const [s, u] of dead) {
       if (!u.fd && u.id === 'zealot') {
@@ -227,7 +248,7 @@ function ko(st) {
 
 // ---------- turn structure ----------
 function startTurn(st, i) {
-  st.turn = i; st.ai = 0; st.pool = 0; st.attackers = []; st.reveals = []; st.ended = false;
+  st.turn = i; st.ai = 0; st.pool = 0; st.attackers = []; st.reveals = []; st.ended = false; st.faceAtk = false;
   for (const u of st.P[i % 2].board) { u.sick = false; u.att = 0; u.allow = 1; u.did = false; }
 }
 function endTurn(st) {
@@ -240,6 +261,14 @@ function endTurn(st) {
   }
   for (const u of P.board) if (!u.fd && u.id === 'wyrm' && !u.did && !u.burrowed) {
     u.burrowed = true; ev(st, p, '{Ps} Tunneling Wyrm burrowed.');
+  }
+  for (const u of P.board) if (u.boost) { u.atk -= u.boost; u.boost = 0; }
+  st.tax[p] = 0;
+  const om = fire(st, opp(p), 'omen');
+  if (om) {
+    const right = (om.x === 1) === st.faceAtk;
+    if (right) st.P[opp(p)].life += CARDS.omen.life;
+    ev(st, opp(p), `{Ps} Omen predicted {O} ${om.x === 1 ? 'would' : 'wouldn’t'} attack. ${right ? `Right: {P} gained ${CARDS.omen.life} life.` : 'Wrong.'}`, 'trap');
   }
   const hx = P.hand.filter(h => h === 'hex').length;
   if (hx) { P.life -= hx * CARDS.hex.life; ev(st, p, `{P} lost ${hx * CARDS.hex.life} life to a Hex.`, 'dmg'); }
@@ -279,9 +308,10 @@ function act(st, a, strict) {
         need(P.hand.length > 0, 'No cards in hand.');
         takeFromHand(st, p, c);
         st.pool += C.pitch;
-        P.temper[c] = (P.temper[c] || 0) + 1;
+        P.temper[c] = (P.temper[c] || 0) + (st.terrain && st.terrain.id === 'greatforge' ? 2 : 1);
         P.deck.push(c);
         ev(st, p, `{P} pitched ${C.name} for ${C.pitch}.`, 'pitch');
+        for (const u of P.board) if (!u.fd && u.id === 'apprentice') { u.atk++; u.boost++; }
         break;
       }
       case 'c': {
@@ -294,13 +324,15 @@ function act(st, a, strict) {
           if (P.sec && k !== costOf(st, p, c)) st.warn.push(`Patient Titan was played for the wrong cost (turn ${turnNo(st)}).`);
         } else need(k === costOf(st, p, c), 'Wrong cost.');
         need(Number.isInteger(l) && l >= 0 && l <= k && (l === 0 || C.blood), 'Bad life payment.');
-        need(st.pool >= k - l, 'Not enough resources.');
+        const tax = taxOf(st, p);
+        need(st.pool >= k + tax - l, 'Not enough resources.');
         if (C.type === 'unit') need(P.board.length < MAX_UNITS, 'Your side of the board is full.');
         if (C.target) need(spellTargets(st, c).includes(tg), 'Pick a valid target.');
-        if (c === 'map') need(POOL.includes(pick) && pick !== 'map', 'Pick a card.');
+        if (c === 'map') need(poolFor(st.v).includes(pick) && pick !== 'map', 'Pick a card.');
 
         takeFromHand(st, p, c);
-        st.pool -= k - l;
+        st.pool -= k + tax - l;
+        st.tax[p] = 0;
         P.life -= 2 * l;
         ev(st, p, `{P} played ${C.name}${l ? ` (paid ${2 * l} life)` : ''}.`, 'play');
 
@@ -338,11 +370,12 @@ function act(st, a, strict) {
         need(typeof h === 'string' && TRAP_COSTS.includes(k), 'Bad trap.');
         need(P.hand.length > 0, 'No cards in hand.');
         need(P.traps.length < MAX_TRAPS, `You can have at most ${MAX_TRAPS} traps set.`);
-        need(st.pool >= k, 'Not enough resources.');
+        need(st.pool >= k + taxOf(st, p), 'Not enough resources.');
         const pred = c => CARDS[c].type === 'trap' && CARDS[c].cost === k;
         const found = identify(st, p, h, uid, pred);
         takeHidden(st, p, found, pred);
-        st.pool -= k;
+        st.pool -= k + taxOf(st, p);
+        st.tax[p] = 0;
         if (fire(st, q, 'calledshot', t => t.x === k)) {
           P.deck.push(found ? found.c : '?');
           ev(st, q, `{Ps} Called Shot on ${k} cancelled {Os} trap.`, 'trap');
@@ -357,11 +390,12 @@ function act(st, a, strict) {
         need(typeof h === 'string', 'Bad seal.');
         need(P.hand.length > 0, 'No cards in hand.');
         need(P.board.length < MAX_UNITS, 'Your side of the board is full.');
-        need(st.pool >= 1, 'Not enough resources.');
+        need(st.pool >= 1 + taxOf(st, p), 'Not enough resources.');
         const pred = c => !!CARDS[c].disguise;
         const found = identify(st, p, h, uid, pred);
         takeHidden(st, p, found, pred);
-        st.pool -= 1;
+        st.pool -= 1 + taxOf(st, p);
+        st.tax[p] = 0;
         const u = { uid, owner: p, card: found ? found.c : '?', id: null, fd: true, h, sid: found ? found.c : null,
                     atk: 2, hp: 2, dmg: 0, sick: true, rush: false, att: 0, allow: 1, burrowed: false, did: false };
         const at = Number.isInteger(slot) ? Math.max(0, Math.min(slot, P.board.length)) : P.board.length;
@@ -411,12 +445,19 @@ function act(st, a, strict) {
         u.att++; u.did = true; u.burrowed = false;
         if (!st.attackers.includes(au)) st.attackers.push(au);
         const tName = tg === 'f' ? '{O}' : unitName(findUnit(st, tg).u);
+        if (tg === 'f') st.faceAtk = true;
         ev(st, p, `{Ps} ${unitName(u)} attacked ${tName}.`, 'atk');
         if (fire(st, q, 'pitfall')) {
           u.dmg += CARDS.pitfall.dmg;
           ev(st, q, `{Ps} Pitfall hit ${unitName(u)} for ${CARDS.pitfall.dmg}.`, 'trap');
           deaths(st);
           if (!findUnit(st, au)) break;
+        }
+        if (tg === 'f' && fire(st, q, 'sender')) {
+          P.board.splice(P.board.indexOf(u), 1);
+          st.P[u.owner].hand.push(u.card);
+          ev(st, q, `{Ps} Return to Sender sent ${unitName(u)} back to its owner’s hand.`, 'trap');
+          break;
         }
         if (tg === 'f') {
           let d = u.atk;
@@ -468,13 +509,24 @@ function resolveSpell(st, p, c, tg, pick) {
     }
     case 'quickstep': findUnit(st, tg).u.allow += 1; break;
     case 'witch': Q.hand.push('hex'); ev(st, p, '{O} got a Hex.'); break;
+    case 'hone': {
+      const t = findUnit(st, tg).u, n = C.bonus + C.temper * (P.temper.hone || 0);
+      t.atk += n;
+      ev(st, p, `Hone gave ${unitName(t)} +${n} attack.`);
+      break;
+    }
+    case 'tape':
+      st.tax[q] += C.tax;
+      ev(st, p, `Red Tape: {Os} first card next turn costs ${C.tax} more.`);
+      break;
     case 'map':
-      if (P.sec && !mapOptions(P.sec, st.turn).includes(pick)) st.warn.push(`Scavenger's Map picked a card it wasn't offered (turn ${turnNo(st)}).`);
+      if (P.sec && !mapOptions(P.sec, st.turn, st.v).includes(pick)) st.warn.push(`Scavenger's Map picked a card it wasn't offered (turn ${turnNo(st)}).`);
       P.found.push(pick);
       ev(st, p, `{P} found ${CARDS[pick].name}. It arrives at the end of the turn.`);
       break;
     case 'pass':
     case 'field':
+    case 'greatforge':
       if (st.terrain) st.P[st.terrain.owner].discard.push(st.terrain.id);
       st.terrain = { id: c, owner: p };
       return;
@@ -506,7 +558,7 @@ function publicSnap(st) {
 }
 
 function rebuild(log, secrets) {
-  const st = newState(secrets);
+  const st = newState(secrets, log.v || 1);
   let owed = [], pending = false;
   const snaps = [];
   for (let i = 0; i < log.t.length; i++) {

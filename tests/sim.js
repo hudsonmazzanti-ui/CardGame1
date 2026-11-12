@@ -6,7 +6,7 @@
 const vm = require('vm'), fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..', 'js') + path.sep;
 const GAMES = +process.argv[2] || 400;
-for (const f of ['cards.js','sha256.js','engine.js']) vm.runInThisContext(fs.readFileSync(root+f,'utf8'), {filename:f});
+for (const f of ['cards.js','sha256.js','engine.js','bot.js']) vm.runInThisContext(fs.readFileSync(root+f,'utf8'), {filename:f});
 const crypto = require('crypto');
 // sha check
 const ref = crypto.createHash('sha256').update('hello dispatch').digest();
@@ -32,7 +32,10 @@ function botTurn(st, side, secret){
       if (C.blood && R()<0.5) l=Math.min(k, 2);
       for (const r of rest) { if (pool >= k-l) break; if (CARDS[r].pitch>0){ plan.push(['p',r]); pool+=CARDS[r].pitch; } }
       if (C.type==='trap'){
-        const x = c==='calledshot'? Math.floor(R()*5) : null;
+        const x = pick(trapChoices(c));
+        const plan2 = [...plan]; let pool2 = pool;
+        for (const r of rest) { if (pool2 >= C.cost + taxOf(st, side)) break; if (CARDS[r].pitch > 0 && !plan2.some(a => a[1] === r)) { plan2.push(['p', r]); pool2 += CARDS[r].pitch; } }
+        plan.splice(0, plan.length, ...plan2);
         cands.push([...plan, ['t', commitFor(c,x,saltFor(secret.seed,nextUid(st)+plan.length)), C.cost]]);
       } else {
         let tg=null;
@@ -59,9 +62,13 @@ function botTurn(st, side, secret){
 }
 
 let games=0, kos=0, trapsFired=0, warns=0;
+const botWins=[0,0,0];
 for (let g=0; g<GAMES; g++){
   const sec=[mkSecret(), mkSecret()];
-  const log={v:1,id:'x',n:['A','B'],c:[deckCommit(sec[0].seed,sec[0].deck), deckCommit(sec[1].seed,sec[1].deck)],t:[],x:[null,null]};
+  // Game types: random vs random, bot vs random (bot side alternates), bot vs bot.
+  const kind = g % 4, useBot = [kind === 1 || kind === 3, kind === 2 || kind === 3];
+  if (kind === 3) { sec[0].deck = pick(PRESET_DECKS).cards.slice(); sec[1].deck = pick(PRESET_DECKS).cards.slice(); }
+  const log={v:RULES_VERSION,id:'x',n:['A','B'],c:[deckCommit(sec[0].seed,sec[0].deck), deckCommit(sec[1].seed,sec[1].deck)],t:[],x:[null,null]};
   const view = s => { const a=[null,null]; a[s]=sec[s]; return a; };
   for (;;){
     const T = log.t.length, side = T%2;
@@ -79,7 +86,7 @@ for (let g=0; g<GAMES; g++){
       break;
     }
     const st = structuredClone(base.st); startTurn(st, T);
-    const acts = botTurn(st, side, sec[side]);
+    const acts = useBot[side] ? botPlan(st, side, sec[side]) : botTurn(st, side, sec[side]);
     log.t.push(base.owed.length ? {a:acts, r:base.owed} : {a:acts});
     trapsFired += base.owed.length;
   }
@@ -87,7 +94,9 @@ for (let g=0; g<GAMES; g++){
   if (A.snaps.join()!==B.snaps.join() || A.snaps.join()!==full.snaps.join()) throw new Error('final divergence '+g);
   if (full.st.warn.length){ warns++; console.log('WARN', full.st.warn); }
   games++; if (full.st.over.ko) kos++;
+  if (kind === 1 || kind === 2) { const b = kind === 1 ? 0 : 1, w = full.st.over.winner; botWins[w === b ? 0 : w === null ? 1 : 2]++; }
 }
 console.log({games, knockouts: kos, trapsFired, fairPlayWarnings: warns});
+console.log('bot vs random-move player (win/draw/loss):', botWins.join(' / '));
 if (warns) process.exit(1);
 console.log('OK: both phones agreed on every turn of every game.');

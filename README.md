@@ -9,12 +9,14 @@ A five-turn card duel for two players, played by texting links back and forth. T
 3. Your opponent taps the link, picks a deck, plays, and texts a link back.
 4. After five turns each, both phones show the result and run a fair-play check.
 
+To practice, tap **Play the bot** instead. The bot plays one of the starter decks on your phone, and it can't see your hand or traps. Each turn it tries every move it could make, scores the board each one would leave, and keeps making the best move until nothing improves (`js/bot.js`).
+
 Play the whole game on the same phone and browser you started it on. Your hand, deck order and traps are sealed with a secret that only lives on that phone.
 
 ## Rules in one minute
 
 - 20 life each. A knockout wins immediately; otherwise the higher life after five turns each wins.
-- Decks are 10 cards, one copy of each, from a 24-card pool. Start with 3 cards and refill to 3 at the end of every turn.
+- Decks are 10 cards, one copy of each, from a 32-card pool. Start with 3 cards and refill to 3 at the end of every turn.
 - Pay for cards by **pitching** other cards (Flesh and Blood style). Pitched cards go to the bottom of your deck.
 - Attackers pick their targets. **Taunt** units must be attacked first.
 - **Traps** are set face-down and fire automatically during your opponent's turn.
@@ -36,8 +38,8 @@ All the cards live in [`js/cards.js`](js/cards.js). Numbers in `{braces}` in the
 
 When you change a number:
 
-1. Bump `RULES_VERSION` at the top of `js/cards.js`. A game that started on the old rules shows a warning instead of quietly replaying differently.
-2. Run the stress test: `node tests/sim.js`. It plays hundreds of random games between two simulated phones and checks they always agree.
+1. Bump `RULES_VERSION` at the top of `js/cards.js`. When you add a card, give it `since: <new version>` so games started earlier keep their original card pool.
+2. Run the stress test: `node tests/sim.js`. It plays hundreds of games between two simulated phones (random players and the bot) and checks they always agree.
 
 New card *abilities* need code in `js/engine.js`, which looks up behaviour by card id.
 
@@ -57,6 +59,7 @@ New card *abilities* need code in `js/engine.js`, which looks up behaviour by ca
 | `js/cards.js` | Card pool, keywords, starter decks |
 | `js/engine.js` | Rules engine and game replay |
 | `js/sha256.js` | Synchronous SHA-256 used for seals |
+| `js/bot.js` | Computer opponent |
 | `js/link.js` | Link encoding and local storage |
 | `js/ui.js` | Screens and interaction |
 | `tests/sim.js` | Two-phone stress test (`node tests/sim.js`) |
