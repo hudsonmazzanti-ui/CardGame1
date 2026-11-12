@@ -101,6 +101,7 @@ window.addEventListener('hashchange', () => { if (location.hash.slice(1) !== (G 
 
 function go(v) {
   view = v; sheet = null;
+  if (v !== 'game' && v !== 'sent') useRules(RULES_VERSION);   // an older game may have loaded older card numbers
   if (v !== 'game' && v !== 'sent' && location.hash) history.replaceState(null, '', location.pathname);
   render();
   window.scrollTo(0, 0);
@@ -146,6 +147,7 @@ async function openCode(code) {
   G.notice = notice;
   if ((log.v || 1) > RULES_VERSION) G.versionWarn = true;
   if (!G.spectator && !G.joining && !(notice && notice.kind === 'old')) saveRecord(G);
+  if (!G.spectator && !G.joining) G.anim = computeArrival(G);
   view = G.joining ? 'join' : 'game';
   render();
   if (G.bot && G.status === 'bot') runBot();
@@ -183,6 +185,57 @@ function compute(g) {
   }
 }
 
+/*
+  Turn-start playback: compare the board as you left it (your last turn, before the opponent
+  answered) with the board now, so the screen can show what changed.
+*/
+function computeArrival(g) {
+  if (!['my', 'over'].includes(g.status) || g.T < 1 || g.spectator) return null;
+  const secrets = [null, null];
+  secrets[g.side] = g.secret;
+  const o = 1 - g.side;
+  if (g.log.x && g.log.x[o]) secrets[o] = g.log.x[o];
+  const before = rebuild({ ...g.log, t: g.log.t.slice(0, g.T - 1) }, secrets).st;
+  const now = g.base.st;
+  useRules(g.log.v || 1);
+  const units = st => new Map(st.P.flatMap((P, s) => P.board.map(u => [u.uid, { u, s }])));
+  const b = units(before), n = units(now);
+  const anim = { before, enter: new Set(), hit: new Map(), buff: new Map(), died: [], seals: new Set(), life: [] };
+  for (const [uid, { u }] of n) {
+    const was = b.get(uid);
+    if (!was) { anim.enter.add(uid); continue; }
+    const dh = (u.hp - u.dmg) - (was.u.hp - was.u.dmg);
+    if (dh < 0) anim.hit.set(uid, dh);
+    if (u.atk > was.u.atk) anim.buff.set(uid, u.atk - was.u.atk);
+  }
+  for (const [uid, { u, s }] of b) if (!n.has(uid)) anim.died.push({ u, s, idx: before.P[s].board.indexOf(u) });
+  now.P.forEach((P, s) => {
+    const old = new Set(before.P[s].traps.map(t => t.uid));
+    for (const t of P.traps) if (!old.has(t.uid)) anim.seals.add(t.uid);
+    anim.life[s] = [before.P[s].life, P.life];
+  });
+  const changed = anim.enter.size || anim.hit.size || anim.buff.size || anim.died.length || anim.seals.size || anim.life.some(([a, z]) => a !== z);
+  return changed || recapEvents(g).length ? anim : null;
+}
+
+// Runs after the board is drawn: count life totals and clear away destroyed units.
+function playArrival(anim) {
+  const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll('.life[data-from]').forEach(el => {
+    const from = +el.dataset.from, to = +el.dataset.to, out = el.querySelector('.life-n');
+    if (reduce || from === to) return;
+    out.textContent = from;
+    const start = performance.now() + 650, dur = 650;
+    const step = t => {
+      const k = Math.min(1, Math.max(0, (t - start) / dur));
+      out.textContent = Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+  setTimeout(() => document.querySelectorAll('.ut.ghost').forEach(el => el.remove()), reduce ? 0 : 1800);
+}
+
 function preview(g) {
   const st = structuredClone(g.base.st);
   startTurn(st, g.T);
@@ -218,6 +271,7 @@ function render() {
   }[view]();
   $app.innerHTML = html;
   renderSheet();
+  if (view === 'game' && G && G.anim) { const a = G.anim; G.anim = null; playArrival(a); }
 }
 
 function topbar(right = '') {
@@ -391,13 +445,23 @@ function unitTile(g, st, u, side, ctx) {
   if (ctx.targets && ctx.targets.includes(u.uid)) cls.push('is-target');
   if (ctx.ready && ctx.ready.includes(u.uid)) cls.push('is-ready');
   if (ctx.sel === u.uid) cls.push('is-sel');
+  // Turn-start playback
+  const A = ctx.anim;
+  let fx = '', delay = 0;
+  if (A) {
+    if (A.enter.has(u.uid)) { cls.push('anim-enter'); delay = 260; }
+    if (A.hit.has(u.uid)) { cls.push('anim-hit'); delay = 420; fx += `<span class="float dmg">${A.hit.get(u.uid)}</span>`; }
+    else if (A.buff.has(u.uid)) { cls.push('anim-buff'); delay = 420; fx += `<span class="float up">+${A.buff.get(u.uid)}</span>`; }
+    if (ctx.ghost) { cls.push('ghost'); delay = 480; fx = ''; }
+  }
   const tags = [];
   if (taunt) tags.push('Taunt');
   if (u.burrowed) tags.push('Burrowed');
   if (u.fd && mine && u.sid) tags.push('Hidden');
   if (u.owner !== side) tags.push('Stolen');
   if (u.sick && !u.rush && mine && g.status === 'my' && st.turn === g.T) tags.push('New');
-  return `<button class="${cls.join(' ')}" data-unit="${u.uid}" aria-label="${esc(name)}, ${u.atk} attack, ${hp} health">
+  return `<button class="${cls.join(' ')}" ${ctx.ghost ? 'aria-hidden="true" tabindex="-1"' : `data-unit="${u.uid}"`} style="--d:${delay + (ctx.order || 0) * 60}ms" aria-label="${esc(name)}, ${u.atk} attack, ${hp} health">
+    ${fx}
     <span class="ut-name">${esc(name)}</span>
     ${tags.length ? `<span class="ut-tags">${tags.join(' · ')}</span>` : ''}
     ${known ? engraving(u.fd ? u.sid : u.id).rosette : ''}
@@ -410,35 +474,45 @@ function boardRow(g, st, side, ctx) {
   const units = st.P[side].board;
   const slots = ctx.slots && side === g.side;
   const parts = [];
+  // Units destroyed since your last turn appear briefly where they stood, then fade away.
+  const ghosts = ctx.anim ? ctx.anim.died.filter(d => d.s === side).sort((a, b) => a.idx - b.idx) : [];
+  const ghostAt = i => ghosts.filter(d => d.idx === i).map(d => unitTile(g, ctx.anim.before, d.u, side, { anim: ctx.anim, ghost: true })).join('');
   units.forEach((u, i) => {
     if (slots) parts.push(`<button class="slot" data-slot="${i}" aria-label="Place here">+</button>`);
-    parts.push(unitTile(g, st, u, side, ctx));
+    parts.push(ghostAt(i));
+    parts.push(unitTile(g, st, u, side, { ...ctx, order: i }));
   });
+  ghosts.filter(d => d.idx >= units.length).forEach(d => parts.push(unitTile(g, ctx.anim.before, d.u, side, { anim: ctx.anim, ghost: true })));
   if (slots) parts.push(`<button class="slot" data-slot="${units.length}" aria-label="Place here">+</button>`);
-  const empty = !units.length && !slots ? `<span class="row-empty">${side === g.side ? 'Your units go here' : 'No units'}</span>` : '';
+  const empty = !units.length && !slots && !ghosts.length ? `<span class="row-empty">${side === g.side ? 'Your units go here' : 'No units'}</span>` : '';
   return `<div class="row ${side === g.side ? 'row-me' : 'row-them'}">${parts.join('')}${empty}</div>`;
 }
 
-function seals(st, side, mine) {
+function seals(st, side, mine, anim) {
   const ts = st.P[side].traps;
   if (!ts.length) return '';
-  return `<div class="seals">${ts.map(t => `<button class="seal" data-trap="${t.uid}" aria-label="${mine && t.id ? esc(CARDS[t.id].name) : `Face-down trap, cost ${t.k}`}">
+  return `<div class="seals">${ts.map((t, i) => `<button class="seal ${anim && anim.seals.has(t.uid) ? 'anim-seal' : ''}" style="--d:${180 + i * 90}ms" data-trap="${t.uid}" aria-label="${mine && t.id ? esc(CARDS[t.id].name) : `Face-down trap, cost ${t.k}`}">
     <span class="seal-wax">${t.k}</span>${mine && t.id ? `<span class="seal-name">${esc(CARDS[t.id].name)}${t.id === 'calledshot' ? ` · ${t.x}` : t.id === 'omen' ? (t.x ? ' · they attack' : ' · they hold') : ''}</span>` : ''}</button>`).join('')}</div>`;
 }
 
 function seat(g, st, side, ctx) {
   const P = st.P[side], mine = side === g.side;
   const target = ctx.targets && ctx.targets.includes('f') && !mine;
-  const hand = mine ? '' : `<div class="opp-hand" aria-label="${P.hand.length} cards in hand">${P.hand.map(h => h === '?' ? '<i></i>' : `<i class="known" title="${esc(CARDS[h].name)}">${esc(CARDS[h].name.split(' ')[0])}</i>`).join('')}</div>`;
+  const hand = mine ? '' : `<div class="opp-hand" aria-label="${P.hand.length} cards in hand">${P.hand.map(h => h === '?' ? '<i></i>' : `<i class="known" title="${esc(CARDS[h].name)}">${esc(CARDS[h].name.replace(/^The /, '').split(' ')[0])}</i>`).join('')}</div>`;
+  const lf = ctx.anim && ctx.anim.life[side];
+  const moved = lf && lf[0] !== lf[1];
+  const lifeFx = moved ? `data-from="${lf[0]}" data-to="${lf[1]}"` : '';
+  const lifeCls = moved ? (lf[1] < lf[0] ? 'anim-down' : 'anim-up') : '';
   return `<section class="seat ${mine ? 'seat-me' : 'seat-them'}">
-    <button class="life ${target ? 'is-target' : ''}" data-face="${side}" ${target ? '' : 'tabindex="-1"'} aria-label="${esc(nameOf(g, side))}, ${P.life} life">
+    <button class="life ${target ? 'is-target' : ''} ${lifeCls}" ${lifeFx} style="--d:650ms" data-face="${side}" ${target ? '' : 'tabindex="-1"'} aria-label="${esc(nameOf(g, side))}, ${P.life} life">
+      ${moved ? `<span class="float ${lf[1] < lf[0] ? 'dmg' : 'up'}">${lf[1] < lf[0] ? '' : '+'}${lf[1] - lf[0]}</span>` : ''}
       <span class="life-n">${P.life}</span><span class="life-who">${mine && !g.spectator ? 'You' : esc(nameOf(g, side))}</span>
     </button>
     <div class="seat-info">
       <div class="seat-stats"><span>Deck <b>${P.deck.length}</b></span><span>Hand <b>${P.hand.length}</b></span>${Object.keys(P.temper).length ? `<span title="Cards pitched so far">Pitched <b>${Object.values(P.temper).reduce((a, b) => a + b, 0)}</b></span>` : ''}</div>
       ${hand}
     </div>
-    ${seals(st, side, mine && !g.spectator)}
+    ${seals(st, side, mine && !g.spectator, ctx.anim)}
   </section>`;
 }
 
@@ -475,7 +549,7 @@ function renderGame() {
   let st;
   try { st = viewState(g); } catch (e) { g.acts = []; st = viewState(g); }
   const me = g.side, my = g.status === 'my';
-  const ctx = {};
+  const ctx = { anim: g.anim };
   if (my && g.mode === 'target') ctx.targets = g.pend.targets;
   if (my && g.mode === 'attack') { ctx.targets = g.pend.targets; ctx.sel = g.pend.u; }
   if (my && g.mode === 'slot') ctx.slots = true;
@@ -490,12 +564,12 @@ function renderGame() {
   const recap = recapEvents(g);
   const recapHtml = recap.length ? `<details class="recap" ${g.recap ? 'open' : ''}>
       <summary>${g.status === 'over' ? 'Final turns' : `Since your last turn`}<span>${recap.length}</span></summary>
-      <ol>${recap.map(e => `<li class="ev ev-${e.k}">${evText(g, e)}</li>`).join('')}</ol></details>` : '';
+      <ol>${recap.map((e, i) => `<li class="ev ev-${e.k} ${g.anim ? 'ev-in' : ''}" style="--d:${i * 70}ms">${evText(g, e)}</li>`).join('')}</ol></details>` : '';
 
   const terrain = st.terrain ? `<button class="terrain" data-card="${st.terrain.id}">${esc(CARDS[st.terrain.id].name)} <small>${esc(cardText(st.terrain.id).replace('Terrain. ', ''))}</small></button>` : '';
   const turnLabel = g.status === 'my' ? `Your turn ${Math.floor(g.T / 2) + 1}` : g.status === 'over' ? 'Game over' : `Turn ${Math.min(5, Math.floor(g.T / 2) + 1)}`;
 
-  return `${topbar(`<span class="turn-label">${turnLabel}</span>${track(g)}<button class="btn sm ghost" data-act="log" aria-label="Game log">Log</button>`)}
+  return `${topbar(`<span class="turn-label ${g.anim && g.status === 'my' ? 'anim-turn' : ''}">${turnLabel}</span>${track(g)}<button class="btn sm ghost" data-act="log" aria-label="Game log">Log</button>`)}
   <main class="table">
     ${notices.join('')}
     ${statusBanner(g, st)}
@@ -803,7 +877,7 @@ function tapUnit(uid) {
 }
 function startAttack(uid) {
   const g = G, st = viewState(g);
-  g.pend = { kind: 'attack', u: uid, targets: attackTargets(st) };
+  g.pend = { kind: 'attack', u: uid, targets: attackTargets(st, uid) };
   g.mode = 'attack';
   render();
 }
@@ -871,7 +945,11 @@ function runBot() {
   setTimeout(async () => {
     try {
       const next = botRespond(g.log, 1 - g.side, g.bot.secret);
-      if (next && G === g) { g.recap = true; await saveLocal(next); }
+      if (next && G === g) {
+        g.recap = true;
+        await saveLocal(next);
+        if (g.status === 'my' || g.status === 'over') { g.anim = computeArrival(g); render(); }
+      }
     } finally { botBusy = false; }
     if (G === g && g.status === 'bot') runBot();
   }, 650);
@@ -1001,6 +1079,7 @@ document.addEventListener('click', async e => {
       log.n[1] = name;
       log.c[1] = deckCommit(secret.seed, secret.deck);
       G = makeGame(log, 1, secret, await encodeLog(log));
+      G.anim = computeArrival(G);
       saveRecord(G);
       history.replaceState(null, '', '#' + G.code);
       view = 'game'; render(); window.scrollTo(0, 0);

@@ -46,7 +46,7 @@ function botTurn(st, side, secret){
       }
     }
     for (const u of st.P[side].board){
-      if (!attackBlock(st,u.uid)) cands.push([['a', u.uid, pick(attackTargets(st))]]);
+      if (!attackBlock(st,u.uid)) cands.push([['a', u.uid, pick(attackTargets(st,u.uid))]]);
       if (u.fd && u.sid){ const ts=flipTargets(st,u.sid); cands.push([['f', u.uid, u.sid, saltFor(secret.seed,u.uid), ts.length?pick(ts):null]]); }
     }
     if (!cands.length || R()<0.12) break;

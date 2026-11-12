@@ -19,7 +19,7 @@
   Bump RULES_VERSION whenever you change a number, so old game links
   keep playing with the rules they started with.
 */
-const RULES_VERSION = 2;   // 2: added the eight "since: 2" cards
+const RULES_VERSION = 3;   // 2: eight new cards. 3: six pitch-2 cards, four cards now pitch for 1.
 
 const CARDS = {
   // Forge — cards that grow when you pitch them
@@ -39,9 +39,9 @@ const CARDS = {
                 text: 'Disguise {disguise}. When revealed: become a copy of an enemy unit.' },
   calledshot: { name: 'Called Shot', type: 'trap', cost: 1, pitch: 1,
                 text: 'Name a cost from 0 to 4. The first card your opponent plays with that cost is cancelled and goes to the bottom of their deck.' },
-  turncoat:   { name: 'Turncoat', type: 'trap', cost: 3, pitch: 0, max: 3,
+  turncoat:   { name: 'Turncoat', type: 'trap', cost: 3, pitch: 1, max: 3,
                 text: 'When your opponent plays a unit that costs {max} or less, take control of it.' },
-  reflect:    { name: 'Reflect', type: 'trap', cost: 2, pitch: 0,
+  reflect:    { name: 'Reflect', type: 'trap', cost: 2, pitch: 1,
                 text: 'When your opponent casts a spell, cancel it. If it would have dealt damage, it hits them instead.' },
   pitfall:    { name: 'Pitfall', type: 'trap', cost: 1, pitch: 1, dmg: 4,
                 text: 'When an enemy unit attacks, deal {dmg} damage to it first.' },
@@ -53,11 +53,11 @@ const CARDS = {
                 text: 'Rush. When it dies, deal {dmg} damage to your opponent.' },
   bloodprice: { name: 'Blood Price', type: 'spell', cost: 0, pitch: 0, life: 4, target: 'unit',
                 text: 'Destroy a unit. You lose {life} life.' },
-  quickstep:  { name: 'Quickstep', type: 'spell', cost: 1, pitch: 0, target: 'attacked',
+  quickstep:  { name: 'Quickstep', type: 'spell', cost: 1, pitch: 1, target: 'attacked',
                 text: 'One of your units that already attacked this turn can attack again.' },
 
   // Time
-  titan:      { name: 'Patient Titan', type: 'unit', cost: 6, pitch: 0, atk: 7, hp: 7,
+  titan:      { name: 'Patient Titan', type: 'unit', cost: 6, pitch: 1, atk: 7, hp: 7,
                 text: 'Costs 1 less for each of your turns it spends in your hand.' },
   lancer:     { name: 'Twilight Lancer', type: 'unit', cost: 2, pitch: 1, atk: 2, hp: 3, bonus: 3,
                 text: 'Finale: gains +{bonus} attack and Rush.' },
@@ -103,8 +103,22 @@ const CARDS = {
   sender:     { name: 'Return to Sender', type: 'trap', cost: 2, pitch: 1, since: 2,
                 text: 'When an enemy unit attacks you, return it to its owner’s hand instead.' },
 
+  // ----- Set 3: dependable cards that pitch for 2 -----
+  runner:     { name: 'Postal Runner', type: 'unit', cost: 1, pitch: 2, atk: 2, hp: 1, rush: true, since: 3,
+                text: 'Rush.' },
+  pigeon:     { name: 'Carrier Pigeon', type: 'unit', cost: 0, pitch: 2, atk: 1, hp: 1, evade: true, since: 3,
+                text: 'Flies over Taunt: it can attack anything.' },
+  recruit:    { name: 'Bulwark Recruit', type: 'unit', cost: 2, pitch: 2, atk: 2, hp: 3, taunt: true, since: 3,
+                text: 'Taunt.' },
+  flare:      { name: 'Signal Flare', type: 'spell', cost: 1, pitch: 2, dmg: 2, target: 'unit', since: 3,
+                text: 'Deal {dmg} damage to a unit.' },
+  rations:    { name: 'Field Rations', type: 'spell', cost: 1, pitch: 2, life: 3, since: 3,
+                text: 'Gain {life} life.' },
+  tripwire:   { name: 'Tripwire', type: 'trap', cost: 0, pitch: 2, dmg: 2, since: 3,
+                text: 'When an enemy unit attacks, deal {dmg} damage to it first.' },
+
   // Token
-  hex:       { name: 'Hex', type: 'hex', cost: 1, pitch: 0, life: 2, token: true,
+  hex:      { name: 'Hex', type: 'hex', cost: 1, pitch: 0, life: 2, token: true,
                 text: "Can't be pitched. Play it to get rid of it. If it's in your hand at the end of your turn, lose {life} life." },
 };
 
@@ -120,12 +134,31 @@ const KEYWORDS = {
 
 const PRESET_DECKS = [
   { name: 'The Forge',     cards: ['whelp', 'whetstone', 'aegis', 'golem', 'feeder', 'sergeant', 'map', 'pass', 'pitfall', 'titan'] },
-  { name: 'Blood Rush',    cards: ['knight', 'zealot', 'bloodprice', 'quickstep', 'lancer', 'curtain', 'whelp', 'whetstone', 'wyrm', 'calledshot'] },
-  { name: 'Masquerade',    cards: ['assassin', 'doppel', 'calledshot', 'pitfall', 'reflect', 'turncoat', 'witch', 'map', 'whelp', 'aegis'] },
-  { name: 'The Long Game', cards: ['titan', 'sergeant', 'feeder', 'pass', 'field', 'witch', 'bloodprice', 'pitfall', 'aegis', 'whetstone'] },
+  { name: 'Blood Rush',    cards: ['knight', 'zealot', 'bloodprice', 'quickstep', 'lancer', 'curtain', 'whelp', 'whetstone', 'runner', 'calledshot'] },
+  { name: 'Masquerade',    cards: ['assassin', 'doppel', 'calledshot', 'pitfall', 'reflect', 'turncoat', 'witch', 'pigeon', 'whelp', 'aegis'] },
+  { name: 'The Long Game', cards: ['titan', 'sergeant', 'recruit', 'pass', 'pitfall', 'feeder', 'bloodprice', 'rations', 'aegis', 'whetstone'] },
   { name: 'Foundry',       cards: ['apprentice', 'drake', 'greatforge', 'hone', 'whelp', 'golem', 'whetstone', 'aegis', 'wraith', 'sender'] },
   { name: 'Red Tape',      cards: ['tape', 'omen', 'calledshot', 'sender', 'wraith', 'sergeant', 'zealot', 'lancer', 'curtain', 'map'] },
 ];
+
+/*
+  Old numbers, so games started on an earlier rules version replay exactly as they were played.
+  LEGACY[v] lists what changed *after* version v. A game on version v uses these values.
+*/
+const LEGACY = {
+  2: { turncoat: { pitch: 0 }, reflect: { pitch: 0 }, quickstep: { pitch: 0 }, titan: { pitch: 0 } },
+};
+const CURRENT = JSON.parse(JSON.stringify(CARDS));
+let rulesInUse = RULES_VERSION;
+function useRules(v) {
+  v = v || 1;
+  if (v === rulesInUse) return;
+  for (const id in CURRENT) Object.assign(CARDS[id], CURRENT[id]);
+  for (const k of Object.keys(LEGACY).map(Number).sort((a, b) => b - a)) {
+    if (v <= k) for (const [id, patch] of Object.entries(LEGACY[k])) Object.assign(CARDS[id], patch);
+  }
+  rulesInUse = v;
+}
 
 function cardText(id) {
   const c = CARDS[id];

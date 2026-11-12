@@ -61,7 +61,7 @@ function botCandidates(st, me, sec) {
         for (const tg of ts.length ? ts : [null])
           out.push([...plan, ['f', u.uid, u.sid, saltFor(sec.seed, u.uid), tg]]);
     }
-    if (!attackBlock(st, u.uid)) for (const tg of attackTargets(st)) out.push([['a', u.uid, tg]]);
+    if (!attackBlock(st, u.uid)) for (const tg of attackTargets(st, u.uid)) out.push([['a', u.uid, tg]]);
   }
   return out;
 }

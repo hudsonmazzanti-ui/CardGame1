@@ -16,7 +16,7 @@ Play the whole game on the same phone and browser you started it on. Your hand, 
 ## Rules in one minute
 
 - 20 life each. A knockout wins immediately; otherwise the higher life after five turns each wins.
-- Decks are 10 cards, one copy of each, from a 32-card pool. Start with 3 cards and refill to 3 at the end of every turn.
+- Decks are 10 cards, one copy of each, from a 38-card pool. Start with 3 cards and refill to 3 at the end of every turn.
 - Pay for cards by **pitching** other cards (Flesh and Blood style). Pitched cards go to the bottom of your deck.
 - Attackers pick their targets. **Taunt** units must be attacked first.
 - **Traps** are set face-down and fire automatically during your opponent's turn.

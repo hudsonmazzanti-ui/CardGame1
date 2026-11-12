@@ -112,10 +112,13 @@ function attackBlock(st, uid) {
     return `Narrow Pass: only ${CARDS.pass.max} units can attack each turn.`;
   return null;
 }
-function attackTargets(st) {
+// Who a unit can attack. Units with Taunt must be attacked first, unless the attacker flies over them.
+function attackTargets(st, au) {
   const q = opp(active(st)), Q = st.P[q];
+  const f = au != null ? findUnit(st, au) : null;
+  const evade = f && !f.u.fd && CARDS[f.u.id] && CARDS[f.u.id].evade;
   const taunts = tauntUnits(st, q);
-  if (taunts.length) return taunts.map(u => u.uid);
+  if (taunts.length && !evade) return taunts.map(u => u.uid);
   return ['f', ...Q.board.filter(u => !u.burrowed).map(u => u.uid)];
 }
 function spellTargets(st, c) {
@@ -145,6 +148,7 @@ function costOf(st, p, c) {
 function spellDamage(st, p, c) {
   if (c === 'whetstone') return CARDS.whetstone.dmg + CARDS.whetstone.temper * (st.P[p].temper.whetstone || 0);
   if (c === 'curtain') return turnNo(st) === 5 ? CARDS.curtain.finale : CARDS.curtain.dmg;
+  if (c === 'flare') return CARDS.flare.dmg;
   return 0;
 }
 function whelpStats(st, p) {
@@ -440,7 +444,7 @@ function act(st, a, strict) {
         need(f && f.side === p, 'That unit isn’t yours.');
         const why = attackBlock(st, au);
         need(!why, why);
-        need(attackTargets(st).includes(tg), 'Pick a valid target.');
+        need(attackTargets(st, au).includes(tg), 'Pick a valid target.');
         const u = f.u;
         u.att++; u.did = true; u.burrowed = false;
         if (!st.attackers.includes(au)) st.attackers.push(au);
@@ -450,6 +454,12 @@ function act(st, a, strict) {
         if (fire(st, q, 'pitfall')) {
           u.dmg += CARDS.pitfall.dmg;
           ev(st, q, `{Ps} Pitfall hit ${unitName(u)} for ${CARDS.pitfall.dmg}.`, 'trap');
+          deaths(st);
+          if (!findUnit(st, au)) break;
+        }
+        if (fire(st, q, 'tripwire')) {
+          u.dmg += CARDS.tripwire.dmg;
+          ev(st, q, `{Ps} Tripwire hit ${unitName(u)} for ${CARDS.tripwire.dmg}.`, 'trap');
           deaths(st);
           if (!findUnit(st, au)) break;
         }
@@ -501,6 +511,16 @@ function resolveSpell(st, p, c, tg, pick) {
       else { const t = findUnit(st, tg).u; t.dmg += d; ev(st, p, `${unitName(t)} took ${d} damage.`, 'dmg'); }
       break;
     }
+    case 'flare': {
+      const t = findUnit(st, tg).u;
+      t.dmg += C.dmg;
+      ev(st, p, `Signal Flare hit ${unitName(t)} for ${C.dmg}.`, 'dmg');
+      break;
+    }
+    case 'rations':
+      P.life += C.life;
+      ev(st, p, `{P} gained ${C.life} life.`);
+      break;
     case 'bloodprice': {
       const t = findUnit(st, tg).u;
       t.doomed = true; P.life -= C.life;
@@ -558,6 +578,7 @@ function publicSnap(st) {
 }
 
 function rebuild(log, secrets) {
+  useRules(log.v || 1);
   const st = newState(secrets, log.v || 1);
   let owed = [], pending = false;
   const snaps = [];
