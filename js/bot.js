@@ -54,6 +54,13 @@ function botCandidates(st, me, sec) {
       for (const plan of botPayPlans(st, P.hand, i, 1 + tax))
         out.push([...plan, ['d', commitFor(c, null, saltFor(sec.seed, base + plan.length)), P.board.length]]);
   });
+  for (const c of new Set(P.discard)) {
+    const C = CARDS[c];
+    if (!C || !C.haunt || P.board.length >= MAX_UNITS) continue;
+    const k = costOf(st, me, c) + C.haunt;
+    for (const plan of botPayPlans(st, P.hand, -1, k + tax))
+      out.push([...plan, ['c', c, k, 0, null, P.board.length, null, 'g']]);
+  }
   for (const u of P.board) {
     if (u.fd && u.sid && !u.sick) {
       const ts = flipTargets(st, u.sid);
@@ -88,7 +95,14 @@ function botScore(st, me) {
   return score;
 }
 
+// A hand where nothing can be pitched (Hexes aside) may be reshuffled at the start of a turn.
+function canReshuffle(st, me) {
+  const rest = st.P[me].hand.filter(h => h !== 'hex');
+  return st.ai === 0 && rest.length > 0 && rest.every(c => CARDS[c] && CARDS[c].pitch === 0);
+}
+
 function botPlan(st, me, sec) {
+  const stuck = canReshuffle(st, me);
   const acts = [];
   for (let step = 0; step < 16 && !st.over && !st.ended; step++) {
     let best = null, bestScore = botScore(st, me) + 0.05;
@@ -103,6 +117,7 @@ function botPlan(st, me, sec) {
     acts.push(...best.grp);
     st = best.s2;
   }
+  if (stuck && !acts.length) return [['m']];
   acts.push(['e']);
   return acts;
 }

@@ -19,6 +19,7 @@ function mkSecret(){ return { seed: crypto.randomBytes(16).toString('base64url')
 function tryAct(st, a){ const c = structuredClone(st); try { act(c, a, true); return c; } catch(e){ if (e instanceof Fizzle) return null; throw e; } }
 
 function botTurn(st, side, secret){
+  if (canReshuffle(st, side) && R() < 0.6) return [['m']];
   const acts=[];
   for (let n=0; n<12 && !st.over && !st.ended; n++){
     const P = st.P[side], cands=[];

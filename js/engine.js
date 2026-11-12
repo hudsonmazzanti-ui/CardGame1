@@ -145,10 +145,12 @@ function costOf(st, p, c) {
   if (c === 'titan') { const P = st.P[p]; return P.sec ? Math.max(0, C.cost - (P.held.titan || 0)) : null; }
   return C.cost;
 }
-function spellDamage(st, p, c) {
+function spellDamage(st, p, c, tg) {
   if (c === 'whetstone') return CARDS.whetstone.dmg + CARDS.whetstone.temper * (st.P[p].temper.whetstone || 0);
   if (c === 'curtain') return turnNo(st) === 5 ? CARDS.curtain.finale : CARDS.curtain.dmg;
   if (c === 'flare') return CARDS.flare.dmg;
+  if (c === 'requiem') return Math.min(CARDS.requiem.max, CARDS.requiem.dmg + st.P[p].discard.length);
+  if (c === 'rites') { const f = findUnit(st, tg); return f ? f.u.atk : 0; }
   return 0;
 }
 function whelpStats(st, p) {
@@ -216,6 +218,7 @@ function unitStats(st, p, c) {
   if (c === 'whelp') return whelpStats(st, p);
   if (c === 'drake') { const t = (P.temper.drake || 0) * C.temper; return [C.atk + t, C.hp + t]; }
   if (c === 'wraith') { const e = P.echo.wraith || 0; return [C.atk + e, C.hp + e]; }
+  if (c === 'collector') { const b = Math.min(C.max, Math.floor(P.discard.length / 2)); return [C.atk + b, C.hp + b]; }
   return [C.atk, C.hp];
 }
 function deaths(st) {
@@ -291,12 +294,13 @@ function endTurn(st) {
 // ---------- actions ----------
 /*
   ['p', card]                                pitch a card
-  ['c', card, cost, lifePaid, target, slot, pick]   play a unit or spell
+  ['c', card, cost, lifePaid, target, slot, pick, src]  play a unit or spell (src 'g' = from the discard pile)
   ['t', seal, cost]                          set a trap face-down
   ['d', seal, slot]                          play a unit face-down (costs 1)
   ['f', uid, card, salt, target]             flip a face-down unit
   ['a', uid, target]                         attack ('f' = the opponent)
   ['e']                                      end turn
+  ['m']                                      reshuffle a stuck hand into the deck and pass (first action only)
 */
 function act(st, a, strict) {
   const p = active(st), q = opp(p), P = st.P[p], Q = st.P[q];
@@ -319,14 +323,18 @@ function act(st, a, strict) {
         break;
       }
       case 'c': {
-        const [, c, k, l = 0, tg = null, slot = null, pick = null] = a;
+        const [, c, k, l = 0, tg = null, slot = null, pick = null, src = null] = a;
         const C = CARDS[c];
+        const haunt = src === 'g';   // played from the discard pile (Restless Ghoul)
         need(C && C.type !== 'trap', 'Unknown card.');
-        need(P.hand.length > 0, 'No cards in hand.');
+        if (haunt) {
+          need(C.haunt && P.discard.includes(c), 'That card isn’t in your discard pile.');
+          need(k === costOf(st, p, c) + C.haunt, 'Wrong cost.');
+        } else need(P.hand.length > 0, 'No cards in hand.');
         if (c === 'titan') {
           need(Number.isInteger(k) && k >= 0 && k <= C.cost, 'Bad cost.');
           if (P.sec && k !== costOf(st, p, c)) st.warn.push(`Patient Titan was played for the wrong cost (turn ${turnNo(st)}).`);
-        } else need(k === costOf(st, p, c), 'Wrong cost.');
+        } else if (!haunt) need(k === costOf(st, p, c), 'Wrong cost.');
         need(Number.isInteger(l) && l >= 0 && l <= k && (l === 0 || C.blood), 'Bad life payment.');
         const tax = taxOf(st, p);
         need(st.pool >= k + tax - l, 'Not enough resources.');
@@ -334,7 +342,8 @@ function act(st, a, strict) {
         if (C.target) need(spellTargets(st, c).includes(tg), 'Pick a valid target.');
         if (c === 'map') need(poolFor(st.v).includes(pick) && pick !== 'map', 'Pick a card.');
 
-        takeFromHand(st, p, c);
+        if (haunt) P.discard.splice(P.discard.indexOf(c), 1);
+        else takeFromHand(st, p, c);
         st.pool -= k + tax - l;
         st.tax[p] = 0;
         P.life -= 2 * l;
@@ -359,7 +368,7 @@ function act(st, a, strict) {
           // Played away. Nothing happens.
         } else {
           if (fire(st, q, 'reflect')) {
-            const d = spellDamage(st, p, c);
+            const d = spellDamage(st, p, c, tg);
             if (d) P.life -= d;
             P.discard.push(c);
             ev(st, q, `{Ps} Reflect cancelled ${C.name}${d ? ` and sent ${d} damage back at {O}` : ''}.`, 'trap');
@@ -487,6 +496,20 @@ function act(st, a, strict) {
       case 'e':
         endTurn(st);
         break;
+      case 'm': {
+        // Fail-safe for a stuck hand: shuffle it into the deck, pass, and draw a fresh hand.
+        // Hexes stay in hand. Only allowed as the first thing you do in a turn.
+        need(st.ai === 1, 'You can only reshuffle at the start of your turn.');
+        const rest = P.hand.filter(h => h !== 'hex');
+        need(rest.length > 0, 'There’s nothing to reshuffle.');
+        if (P.sec && rest.some(c => CARDS[c] && CARDS[c].pitch > 0)) st.warn.push(`A hand with pitchable cards was reshuffled (turn ${turnNo(st)}).`);
+        if (P.sec) { P.deck = shuffled([...P.deck, ...rest], rngFor(P.sec.seed, 'mull|' + st.turn)); P.held.titan = 0; }
+        else P.deck = Array(P.deck.length + rest.length).fill('?');
+        P.hand = P.hand.filter(h => h === 'hex');
+        ev(st, p, `{P} reshuffled ${rest.length} stuck card${rest.length > 1 ? 's' : ''} into the deck and passed.`, 'pass');
+        endTurn(st);
+        break;
+      }
       default:
         need(false, 'Unknown action.');
     }
@@ -509,6 +532,25 @@ function resolveSpell(st, p, c, tg, pick) {
       const d = spellDamage(st, p, c);
       if (tg === 'f' || c === 'curtain') { Q.life -= d; ev(st, p, `{O} took ${d} damage.`, 'dmg'); }
       else { const t = findUnit(st, tg).u; t.dmg += d; ev(st, p, `${unitName(t)} took ${d} damage.`, 'dmg'); }
+      break;
+    }
+    case 'rites': {
+      const t = findUnit(st, tg).u, d = t.atk;
+      t.doomed = true;
+      Q.life -= d;
+      ev(st, p, `Last Rites: {P} gave up ${unitName(t)} and dealt ${d} damage to {O}.`, 'dmg');
+      break;
+    }
+    case 'requiem': {
+      const d = spellDamage(st, p, c);
+      Q.life -= d;
+      ev(st, p, `Requiem dealt ${d} damage to {O}.`, 'dmg');
+      break;
+    }
+    case 'overcharge': {
+      const t = findUnit(st, tg).u, n = t.atk;
+      t.atk += n; t.boost = (t.boost || 0) + n;
+      ev(st, p, `Overcharge doubled ${unitName(t)}’s attack to ${t.atk} this turn.`);
       break;
     }
     case 'flare': {

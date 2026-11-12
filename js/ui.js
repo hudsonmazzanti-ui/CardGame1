@@ -509,7 +509,7 @@ function seat(g, st, side, ctx) {
       <span class="life-n">${P.life}</span><span class="life-who">${mine && !g.spectator ? 'You' : esc(nameOf(g, side))}</span>
     </button>
     <div class="seat-info">
-      <div class="seat-stats"><span>Deck <b>${P.deck.length}</b></span><span>Hand <b>${P.hand.length}</b></span>${Object.keys(P.temper).length ? `<span title="Cards pitched so far">Pitched <b>${Object.values(P.temper).reduce((a, b) => a + b, 0)}</b></span>` : ''}</div>
+      <div class="seat-stats"><span>Deck <b>${P.deck.length}</b></span><span>Hand <b>${P.hand.length}</b></span><button class="stat-btn" data-act="discard" data-side="${side}">Discard <b>${P.discard.length}</b></button></div>
       ${hand}
     </div>
     ${seals(st, side, mine && !g.spectator, ctx.anim)}
@@ -579,6 +579,7 @@ function renderGame() {
     <div class="midline"><span class="postmark" aria-hidden="true"></span>${terrain}${my && taxOf(st, me) ? `<span class="taxed">Red Tape: your next card costs ${taxOf(st, me)} more</span>` : ''}${my ? `<span class="pool" aria-label="Resources">${st.pool}<small>resources</small></span>` : ''}</div>
     ${boardRow(g, st, me, ctx)}
     ${seat(g, st, me, ctx)}
+    ${my ? turnHelpers(g, st) : ''}
     ${g.spectator ? '' : handHtml(g, st)}
     ${my ? controls(g, st) : ''}
   </main>`;
@@ -603,6 +604,16 @@ function handHtml(g, st) {
     const [atk, hp] = CARDS[c].type === 'unit' ? unitStats(st, g.side, c) : [undefined, undefined];
     return cardFace(c, { cls: cls.join(' '), cost: cost ?? undefined, atk, hp, tags, attrs: `data-hand="${i}" role="button" tabindex="0"` });
   }).join('')}${P.found.length ? `<div class="found muted small">Arriving at end of turn: ${P.found.map(c => esc(CARDS[c].name)).join(', ')}</div>` : ''}</section>`;
+}
+
+// Prompts shown above your hand: a stuck hand you can reshuffle, or a card you can play from the discard pile.
+function turnHelpers(g, st) {
+  if (g.mode) return '';
+  const stuck = !g.acts.length && canReshuffle(st, g.side);
+  const P = st.P[g.side];
+  const haunts = [...new Set(P.discard)].filter(c => CARDS[c] && CARDS[c].haunt);
+  return `${stuck ? `<div class="stuck"><div><b>Nothing in your hand can be pitched.</b> You can shuffle it into your deck, pass this turn, and draw a fresh hand.</div><button class="btn sm" data-act="reshuffle">Reshuffle &amp; pass</button></div>` : ''}
+  ${haunts.map(c => `<div class="stuck haunt"><div><b>${esc(CARDS[c].name)}</b> is in your discard pile. You can play it from there for ${costOf(st, g.side, c) + CARDS[c].haunt}.</div><button class="btn sm" data-act="haunt" data-c="${c}">Play from discard</button></div>`).join('')}`;
 }
 
 function controls(g, st) {
@@ -772,11 +783,11 @@ function tapHand(i) {
   openSheet(cardSheet(c, { buttons, atk, hp, cost: C.type !== 'trap' ? costOf(st, g.side, c) : undefined }));
 }
 
-function startPend(kind, c, hi) {
+function startPend(kind, c, hi, src = null) {
   const g = G, st = viewState(g);
   const C = CARDS[c];
-  const k = kind === 'fd' ? 1 : kind === 'trap' ? C.cost : costOf(st, g.side, c);
-  g.pend = { kind, c, k, l: 0, hi, pitched: [] };
+  const k = kind === 'fd' ? 1 : kind === 'trap' ? C.cost : costOf(st, g.side, c) + (src === 'g' ? C.haunt : 0);
+  g.pend = { kind, c, k, l: 0, hi, pitched: [], src };
   closeSheet();
   advance();
 }
@@ -830,7 +841,7 @@ function commit() {
     for (const a of grp) act(tmp, a, true);
     const uid = nextUid(tmp);
     let main;
-    if (p.kind === 'play') main = ['c', p.c, p.k, p.l, p.tg ?? null, p.slot ?? null, p.pick ?? null];
+    if (p.kind === 'play') main = ['c', p.c, p.k, p.l, p.tg ?? null, p.slot ?? null, p.pick ?? null, ...(p.src ? [p.src] : [])];
     if (p.kind === 'trap') main = ['t', commitFor(p.c, p.x ?? null, saltFor(g.secret.seed, uid)), p.k];
     if (p.kind === 'fd') main = ['d', commitFor(p.c, null, saltFor(g.secret.seed, uid)), p.slot];
     if (p.kind === 'flip') main = ['f', p.u, p.c, saltFor(g.secret.seed, p.u), p.tg ?? null];
@@ -1087,6 +1098,23 @@ document.addEventListener('click', async e => {
     }
     case 'rematch': go('bot'); break;
     case 'undo': G.acts.pop(); render(); break;
+    case 'haunt': {
+      const st = viewState(G), c = d.c;
+      if (!canPay(st, G.side, costOf(st, G.side, c) + CARDS[c].haunt + taxOf(st, G.side), -1)) { toast('You can’t pitch enough to pay for that.'); break; }
+      startPend('play', c, -1, 'g');
+      break;
+    }
+    case 'reshuffle':
+      openSheet({ title: 'Reshuffle and pass?', html: '<p class="muted">Your hand goes into your deck, which is shuffled. Your turn ends, and you draw a fresh hand of 3. Any Hex stays in your hand.</p>',
+        buttons: [{ label: 'Reshuffle and pass', kind: 'primary', fn: () => { G.acts = [[['m']]]; sendTurn(); } }] });
+      break;
+    case 'discard': {
+      const s = +d.side, st = viewState(G), pile = st.P[s].discard;
+      const mine = s === G.side;
+      openSheet({ title: `${mine ? 'Your' : esc(nameOf(G, s)) + '’s'} discard pile`,
+        html: pile.length ? `<div class="pick-grid">${pile.map(c => cardFace(c)).join('')}</div>` : '<p class="muted">Empty. Spells you cast, units that die and traps that fire end up here. Pitched cards go back into the deck instead.</p>' });
+      break;
+    }
     case 'end': endTurnSheet(); break;
     case 'cancel': cancel(); break;
     case 'blood': G.pend.l++; advance(); break;

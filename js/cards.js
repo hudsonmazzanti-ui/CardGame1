@@ -19,7 +19,7 @@
   Bump RULES_VERSION whenever you change a number, so old game links
   keep playing with the rules they started with.
 */
-const RULES_VERSION = 3;   // 2: eight new cards. 3: six pitch-2 cards, four cards now pitch for 1.
+const RULES_VERSION = 4;   // 2: eight new cards. 3: six pitch-2 cards, four cards now pitch for 1. 4: graveyard and combo cards, reshuffling a stuck hand.
 
 const CARDS = {
   // Forge — cards that grow when you pitch them
@@ -117,8 +117,20 @@ const CARDS = {
   tripwire:   { name: 'Tripwire', type: 'trap', cost: 0, pitch: 2, dmg: 2, since: 3,
                 text: 'When an enemy unit attacks, deal {dmg} damage to it first.' },
 
+  // ----- Set 4: graveyard and combo -----
+  ghoul:      { name: 'Restless Ghoul', type: 'unit', cost: 1, pitch: 2, atk: 1, hp: 1, haunt: 2, since: 4,
+                text: 'Haunt: you can play it from your discard pile for {haunt} more.' },
+  collector:  { name: 'Bone Collector', type: 'unit', cost: 2, pitch: 1, atk: 1, hp: 2, max: 4, since: 4,
+                text: 'Enters with +1/+1 for every 2 cards in your discard pile (up to +{max}/+{max}).' },
+  requiem:    { name: 'Requiem', type: 'spell', cost: 3, pitch: 1, dmg: 2, max: 8, since: 4,
+                text: 'Deal {dmg} damage to your opponent, plus 1 for each card in your discard pile (up to {max} total).' },
+  rites:      { name: 'Last Rites', type: 'spell', cost: 1, pitch: 2, target: 'own', since: 4,
+                text: 'Destroy one of your units. Deal damage equal to its attack to your opponent.' },
+  overcharge: { name: 'Overcharge', type: 'spell', cost: 1, pitch: 1, target: 'own', since: 4,
+                text: 'Double one of your units’ attack this turn.' },
+
   // Token
-  hex:      { name: 'Hex', type: 'hex', cost: 1, pitch: 0, life: 2, token: true,
+  hex:     { name: 'Hex', type: 'hex', cost: 1, pitch: 0, life: 2, token: true,
                 text: "Can't be pitched. Play it to get rid of it. If it's in your hand at the end of your turn, lose {life} life." },
 };
 
@@ -130,6 +142,7 @@ const KEYWORDS = {
   Taunt: 'Enemies must attack units with Taunt first.',
   Rush: 'Can attack the turn it is played.',
   Terrain: 'Stays in play and affects both players. A new Terrain replaces the old one.',
+  Haunt: 'You can play this card from your discard pile by paying the extra cost.',
 };
 
 const PRESET_DECKS = [
@@ -139,6 +152,9 @@ const PRESET_DECKS = [
   { name: 'The Long Game', cards: ['titan', 'sergeant', 'recruit', 'pass', 'pitfall', 'feeder', 'bloodprice', 'rations', 'aegis', 'whetstone'] },
   { name: 'Foundry',       cards: ['apprentice', 'drake', 'greatforge', 'hone', 'whelp', 'golem', 'whetstone', 'aegis', 'wraith', 'sender'] },
   { name: 'Red Tape',      cards: ['tape', 'omen', 'calledshot', 'sender', 'wraith', 'sergeant', 'zealot', 'lancer', 'curtain', 'map'] },
+  { name: 'Catapult',      cards: ['golem', 'titan', 'apprentice', 'hone', 'overcharge', 'rites', 'sergeant', 'whelp', 'recruit', 'map'] },
+  { name: 'Ossuary',       cards: ['ghoul', 'collector', 'requiem', 'rites', 'zealot', 'feeder', 'bloodprice', 'flare', 'runner', 'tripwire'] },
+  { name: 'Postmaster',    cards: ['tape', 'witch', 'calledshot', 'sender', 'pass', 'pigeon', 'runner', 'recruit', 'omen', 'tripwire'] },
 ];
 
 /*

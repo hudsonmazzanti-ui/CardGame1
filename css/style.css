@@ -340,6 +340,14 @@ body[data-view="game"]::before { background: var(--table); }
 }
 .terrain { flex: 1; min-width: 0; border: 0; background: none; padding: 0; text-align: left; font: 700 15px/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; }
 .terrain small { display: block; font: 400 12px/1.3 var(--body); text-transform: none; letter-spacing: 0; color: var(--muted); }
+.stat-btn { border: 0; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+.stuck {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: var(--r); font-size: 14px;
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+.stuck > div { flex: 1 1 200px; min-width: 0; }
+.stuck.haunt { background: color-mix(in srgb, var(--air) 8%, var(--surface)); border-color: color-mix(in srgb, var(--air) 40%, var(--line)); }
 .taxed { font: 500 11px/1.3 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--wax); text-align: right; }
 .pool { margin-left: auto; display: flex; align-items: baseline; gap: 6px; font: 800 28px/1 var(--display); font-variant-numeric: tabular-nums; }
 .pool small { font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
