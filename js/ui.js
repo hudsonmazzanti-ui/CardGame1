@@ -241,6 +241,7 @@ function renderEdit() {
       <div class="counter ${n === 10 ? 'full' : ''}"><b>${n}</b>/10</div>
       <button class="btn primary" data-act="save-deck" ${n === 10 ? '' : 'disabled'}>Save</button>
     </div>
+    <p class="muted small hint">Tap a card to add or remove it. Press and hold to read it.</p>
     ${d.index != null ? `<button class="link danger" data-act="delete-deck">Delete this deck</button>` : ''}
     ${groups.map(([t, label]) => `<section class="block"><h2 class="eyebrow">${label}</h2><div class="card-grid">
       ${POOL.filter(id => CARDS[id].type === t).map(id => cardFace(id, { cls: d.cards.includes(id) ? 'picked' : '', attrs: `data-toggle="${id}" role="button" tabindex="0" aria-pressed="${d.cards.includes(id)}"` })).join('')}
@@ -261,8 +262,8 @@ function renderRules() {
       <div class="rule"><h3>Sending turns</h3><p>The whole game travels inside the link. Your hand, deck and traps are sealed, so the link can’t be peeked at. Play on the same phone and browser for the whole game: that’s where your sealed cards live.</p></div>
     </section>
     <section class="block"><h2 class="eyebrow">Keywords</h2><dl class="keywords">${Object.entries(KEYWORDS).map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></section>
-    ${groups.map(([t, label]) => `<section class="block"><h2 class="eyebrow">${label}</h2><div class="card-grid">${POOL.filter(id => CARDS[id].type === t).map(id => cardFace(id)).join('')}</div></section>`).join('')}
-    <section class="block"><h2 class="eyebrow">Token</h2><div class="card-grid">${cardFace('hex')}</div></section>
+    ${groups.map(([t, label]) => `<section class="block"><h2 class="eyebrow">${label}</h2><div class="card-grid">${POOL.filter(id => CARDS[id].type === t).map(id => cardFace(id, { attrs: `data-card="${id}" role="button" tabindex="0"` })).join('')}</div></section>`).join('')}
+    <section class="block"><h2 class="eyebrow">Token</h2><div class="card-grid">${cardFace('hex', { attrs: 'data-card="hex" role="button" tabindex="0"' })}</div></section>
   </main>`;
 }
 
@@ -523,12 +524,66 @@ function renderSheet() {
 }
 
 function cardSheet(id, extra = {}) {
-  const kw = Object.keys(KEYWORDS).filter(k => CARDS[id].text.includes(k));
+  const C = CARDS[id];
+  const kw = Object.keys(KEYWORDS).filter(k => C.text.includes(k));
+  const facts = [];
+  if (C.pitch === 0) facts.push('Pitch 0: this card can’t be pitched, so you have to play it.');
+  else facts.push(`Pitch ${C.pitch}: gives ${C.pitch} resource${C.pitch > 1 ? 's' : ''} when you pitch it to pay for another card.`);
+  if (C.type === 'trap') facts.push(`Set face-down for ${C.cost}. Your opponent sees only the cost.`);
+  const related = id === 'witch' ? `<p class="muted small">The Hex it creates:</p><div class="sheet-card small-card">${cardFace('hex')}</div>` : '';
   return {
     title: '',
-    html: `<div class="sheet-card">${cardFace(id, extra)}</div>${kw.length ? `<dl class="keywords small">${kw.map(k => `<div><dt>${k}</dt><dd>${esc(KEYWORDS[k])}</dd></div>`).join('')}</dl>` : ''}`,
+    html: `<div class="sheet-card">${cardFace(id, extra)}</div>
+      ${kw.length ? `<dl class="keywords small">${kw.map(k => `<div><dt>${k}</dt><dd>${esc(KEYWORDS[k])}</dd></div>`).join('')}</dl>` : ''}
+      <ul class="facts">${facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>${related}`,
     buttons: extra.buttons || [],
   };
+}
+
+// Press and hold a card in the deck builder to read it.
+let holdTimer = null, holdStart = null, suppressClick = false;
+document.addEventListener('pointerdown', e => {
+  const el = e.target.closest('[data-toggle]');
+  suppressClick = false;
+  if (!el || e.button > 0) return;
+  holdStart = { x: e.clientX, y: e.clientY };
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    holdTimer = null;
+    suppressClick = true;
+    el.classList.add('held');
+    setTimeout(() => el.classList.remove('held'), 200);
+    if (navigator.vibrate) navigator.vibrate(10);
+    deckCardSheet(el.dataset.toggle);
+  }, 420);
+});
+const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+document.addEventListener('pointermove', e => {
+  if (holdTimer && holdStart && Math.hypot(e.clientX - holdStart.x, e.clientY - holdStart.y) > 10) cancelHold();
+});
+document.addEventListener('pointerup', cancelHold);
+document.addEventListener('pointercancel', cancelHold);
+document.addEventListener('contextmenu', e => {
+  const el = e.target.closest('[data-toggle]');
+  if (!el) return;
+  e.preventDefault();
+  if (!sheet) { cancelHold(); suppressClick = true; deckCardSheet(el.dataset.toggle); }
+});
+function deckCardSheet(id) {
+  const inDeck = editDeck.cards.includes(id);
+  const full = !inDeck && editDeck.cards.length >= 10;
+  openSheet(cardSheet(id, { buttons: [{
+    label: inDeck ? 'Remove from deck' : 'Add to deck', kind: inDeck ? '' : 'primary', disabled: full,
+    note: full ? 'Your deck already has 10 cards' : '',
+    fn: () => { toggleDeckCard(id); closeSheet(); },
+  }] }));
+}
+function toggleDeckCard(id) {
+  const i = editDeck.cards.indexOf(id);
+  if (i >= 0) editDeck.cards.splice(i, 1);
+  else if (editDeck.cards.length < 10) editDeck.cards.push(id);
+  else { toast('A deck holds 10 cards. Remove one first.'); return; }
+  const y = window.scrollY; render(); window.scrollTo(0, y);
 }
 
 // ---------- my turn: building actions ----------
@@ -755,11 +810,8 @@ document.addEventListener('click', async e => {
   if (d.edit !== undefined) { const dk = savedDecks()[+d.edit]; editDeck = { name: dk.name, cards: dk.cards.slice(), index: +d.edit }; return go('edit'); }
   if (d.copy !== undefined) { const dk = PRESET_DECKS[+d.copy]; editDeck = { name: dk.name + ' (mine)', cards: dk.cards.slice(), index: null }; return go('edit'); }
   if (d.toggle) {
-    const id = d.toggle, i = editDeck.cards.indexOf(id);
-    if (i >= 0) editDeck.cards.splice(i, 1);
-    else if (editDeck.cards.length < 10) editDeck.cards.push(id);
-    else { toast('A deck holds 10 cards. Remove one first.'); return; }
-    const y = window.scrollY; render(); window.scrollTo(0, y); return;
+    if (suppressClick) { suppressClick = false; return; }
+    return toggleDeckCard(d.toggle);
   }
   if (d.hand !== undefined) return tapHand(+d.hand);
   if (d.unit !== undefined) return tapUnit(+d.unit);
