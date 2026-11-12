@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dispatch</title>
+<style>
+:root{
+  --bg:#1b1712; --panel:#272019; --panel2:#30281f; --ink:#f1e6d2; --muted:#b5a68c;
+  --line:#4a3e30; --you:#6fb3ff; --them:#ff8a6f; --gold:#f0c060; --good:#7bd88f; --bad:#ff6b6b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:26px;margin:4px 0 2px;letter-spacing:.06em}
+h2{font-size:18px;margin:0 0 8px}
+.sub{color:var(--muted);margin:0 0 14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
+button{font:inherit;border:0;border-radius:10px;padding:11px 16px;background:var(--gold);color:#241a0c;font-weight:700;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);font-weight:500}
+button:disabled{opacity:.4;cursor:default}
+input,textarea{font:inherit;width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:#14110d;color:var(--ink)}
+textarea{min-height:70px}
+label{display:block;margin:8px 0 4px;color:var(--muted);font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.score{display:flex;justify-content:space-between;align-items:center;font-weight:700}
+.score .y{color:var(--you)} .score .t{color:var(--them)}
+.lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.lane{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px;min-width:0;display:flex;flex-direction:column;gap:6px}
+.lane.armed{outline:2px dashed var(--gold);cursor:pointer}
+.lane-h{text-align:center}
+.lane-h b{display:block;font-size:14px}
+.lane-h span{font-size:12px;color:var(--gold)}
+.side{min-height:44px;display:flex;flex-direction:column;gap:4px}
+.tot{display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:4px 2px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.tot .y{color:var(--you)} .tot .t{color:var(--them)}
+.lead{text-align:center;font-size:12px;color:var(--muted)}
+.chip{font-size:12px;border-radius:6px;padding:3px 6px;display:flex;justify-content:space-between;gap:4px;white-space:nowrap;overflow:hidden}
+.chip.y{background:#1d3550;border-left:3px solid var(--you)}
+.chip.t{background:#4a2620;border-left:3px solid var(--them)}
+.chip.pend{background:transparent;border:1px dashed var(--you);opacity:.85;cursor:pointer}
+.chip.hid{background:transparent;border:1px dashed var(--them);color:var(--muted);justify-content:center}
+.chip .pw{font-weight:800}
+.chip small{color:var(--muted)}
+.hand{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px}
+.card{background:#f3e7cf;color:#2a2116;border-radius:10px;padding:8px;cursor:pointer;border:2px solid transparent;min-height:84px;display:flex;flex-direction:column;gap:2px}
+.card .top{display:flex;justify-content:space-between;font-weight:800}
+.card .txt{font-size:11px;line-height:1.25;color:#5a4a33}
+.card.sel{border-color:var(--gold);box-shadow:0 0 0 3px #f0c06055}
+.card.used{opacity:.25;cursor:default}
+.msg{padding:10px 12px;border-radius:8px;background:#3a2f22;margin:8px 0}
+.msg.warn{background:#4d2a1f;border:1px solid var(--bad)}
+.msg.ok{background:#1f3a26;border:1px solid var(--good)}
+.big{font-size:22px;font-weight:800;text-align:center;margin:6px 0}
+.log{font-size:13px;color:var(--muted)}
+.log div{padding:2px 0}
+details summary{cursor:pointer;color:var(--gold)}
+.rules li{margin:4px 0}
+@media (max-width:420px){ main{padding:12px} .chip small{display:none} }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+"use strict";
+/* ============================================================
+   DISPATCH — a 5-round card game played by passing links.
+   The whole game lives in the URL after '#'. Nothing is stored
+   on a server. Player A's hidden picks use commit/reveal so the
+   link never shows them before Player B has chosen.
+   ============================================================ */
+
+const ROUNDS = 5, PER_ROUND = 2;
+const CARDS = [
+  {n:'Scout',    p:1, t:''},
+  {n:'Squire',   p:2, t:''},
+  {n:'Archer',   p:3, t:''},
+  {n:'Lancer',   p:4, t:''},
+  {n:'Knight',   p:5, t:''},
+  {n:'Champion', p:6, t:''},
+  {n:'Ambush',   p:1, t:'Becomes 5 if the enemy played to this lane the same round.'},
+  {n:'Banner',   p:0, t:'Your other cards in this lane get +1.'},
+  {n:'Saboteur', p:2, t:"Enemy's strongest card in this lane loses 3."},
+  {n:'Spy',      p:0, t:'You win this lane if power is tied.'},
+  {n:'Reserves', p:3, t:'+3 power if played in round 4 or 5.'},
+  {n:'Herald',   p:2, t:'This lane is worth +1 point.'},
+];
+const LANE_NAMES = ['Ridge','Harbor','Forest','Bridge','Mill','Pass','Ford','Tower','Marsh'];
+
+// ---------- small utilities ----------
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function b64uEncode(bytes){ let s=''; bytes.forEach(b=>s+=String.fromCharCode(b)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function b64uDecode(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while(str.length%4) str+='='; return Uint8Array.from(atob(str), c=>c.charCodeAt(0)); }
+const encodeState = st => b64uEncode(new TextEncoder().encode(JSON.stringify(st)));
+const decodeState = s => JSON.parse(new TextDecoder().decode(b64uDecode(s)));
+const randId = n => b64uEncode(crypto.getRandomValues(new Uint8Array(n)));
+function rng(seed){ return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function shuffle(a, r){ a=a.slice(); for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
+async function commitHash(id, round, plays, salt){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${id}|${round}|${plays}|${salt}`));
+  return b64uEncode(new Uint8Array(buf).slice(0,16));
+}
+// plays are stored as e.g. "e1k2" = card 'e'(4, Knight) to lane 1, card 'k'(10) to lane 2
+const playsToStr = ps => ps.map(p => String.fromCharCode(97+p.c) + p.l).join('');
+function strToPlays(s){
+  if(typeof s!=='string' || !/^([a-l][0-2]){2}$/.test(s)) throw new Error('bad plays');
+  const out=[]; for(let i=0;i<s.length;i+=2) out.push({c:s.charCodeAt(i)-97, l:+s[i+1]}); return out;
+}
+const store = {
+  get(k){ try{ return JSON.parse(localStorage.getItem('dispatch:'+k)); }catch{ return null; } },
+  set(k,v){ try{ localStorage.setItem('dispatch:'+k, JSON.stringify(v)); }catch{} },
+};
+
+// ---------- game rules ----------
+function lanesFor(seed){
+  const r = rng(seed);
+  const names = shuffle(LANE_NAMES, r).slice(0,3);
+  const vals = shuffle([2,3,4], r);
+  return names.map((n,i)=>({name:n, value:vals[i]}));
+}
+
+// entries: [{side:0|1, c, l, round}]  -> per-lane results
+function resolve(entries, lanes){
+  return lanes.map((lane, L) => {
+    const here = entries.filter(e => e.l===L);
+    const pre = here.map(e => {
+      let v = CARDS[e.c].p;
+      if(e.c===6 && here.some(o => o.side!==e.side && o.round===e.round)) v = 5;          // Ambush
+      if(e.c===10 && e.round>=4) v += 3;                                                  // Reserves
+      v += here.filter(o => o!==e && o.side===e.side && o.c===7).length;                  // Banner
+      return v;
+    });
+    const loss = here.map(()=>0);
+    here.forEach(e => {                                                                   // Saboteur
+      if(e.c!==8) return;
+      let best=-1;
+      here.forEach((o,i)=>{ if(o.side!==e.side && (best<0 || pre[i]>pre[best])) best=i; });
+      if(best>=0) loss[best]+=3;
+    });
+    const power = here.map((e,i)=>Math.max(0, pre[i]-loss[i]));
+    const tot=[0,0]; here.forEach((e,i)=>tot[e.side]+=power[i]);
+    const spy=[0,1].map(s=>here.some(e=>e.side===s && e.c===9));
+    let winner=null;
+    if(tot[0]>tot[1]) winner=0; else if(tot[1]>tot[0]) winner=1;
+    else if(spy[0]&&!spy[1]) winner=0; else if(spy[1]&&!spy[0]) winner=1;
+    const value = lane.value + here.filter(e=>e.c===11).length;                            // Herald
+    return {here, power, tot, winner, value};
+  });
+}
+function scoreOf(res){
+  const pts=[0,0], pow=[0,0];
+  res.forEach(r=>{ if(r.winner!==null) pts[r.winner]+=r.value; pow[0]+=r.tot[0]; pow[1]+=r.tot[1]; });
+  return {pts, pow};
+}
+
+// ---------- state & validation ----------
+// state = {v:1, id, s:seed, n:[nameA,nameB], r:[{c:commit, p:plays(A, after reveal), k:salt, b:plays(B)}]}
+async function validate(st){
+  if(st.v!==1 || !st.id || typeof st.s!=='number' || !Array.isArray(st.r) || st.r.length>ROUNDS) throw new Error('Not a Dispatch game link.');
+  const used=[new Set(), new Set()];
+  for(let i=0;i<st.r.length;i++){
+    const rd=st.r[i], last = i===st.r.length-1;
+    if(!rd.c) throw new Error(`Round ${i+1} is missing its sealed move.`);
+    if(!last && (!rd.p || !rd.b)) throw new Error(`Round ${i+1} is incomplete.`);
+    if(rd.p){
+      if(!rd.b) throw new Error(`Round ${i+1} was revealed before both played.`);
+      if(await commitHash(st.id, i+1, rd.p, rd.k) !== rd.c) throw new Error(`Round ${i+1}: ${st.n[0]}'s revealed cards don't match what they sealed. Something was tampered with.`);
+    }
+    for(const [side,key] of [[0,'p'],[1,'b']]){
+      if(!rd[key]) continue;
+      const ps=strToPlays(rd[key]);
+      if(ps[0].c===ps[1].c) throw new Error(`Round ${i+1}: same card played twice.`);
+      for(const p of ps){ if(used[side].has(p.c)) throw new Error(`Round ${i+1}: ${CARDS[p.c].n} was already used.`); used[side].add(p.c); }
+    }
+  }
+}
+const progress = st => st.r.reduce((n,r)=>n+(r.c?1:0)+(r.b?1:0)+(r.p?1:0),0);
+
+// ---------- app ----------
+let S=null, ME=0, picks=[], armed=null, notice='', shareInfo=null, draftName=null;
+
+async function load(){
+  const h = location.hash.replace(/^#/,'');
+  picks=[]; armed=null; shareInfo=null; notice='';
+  if(!h){ S=null; return renderHome(); }
+  let st;
+  try{ st = decodeState(h); await validate(st); }
+  catch(e){ return renderHome(e.message && e.message.length<200 ? e.message : 'That link looks broken or incomplete. Make sure the whole link was copied.'); }
+  ME = store.get(st.id+':secrets') ? 0 : 1;   // only the creator's device holds secrets
+  const seen = store.get(st.id+':last');
+  if(seen){
+    try{
+      const old = decodeState(seen);
+      if(progress(old) > progress(st)) notice = `<div class="msg warn">This is an older link — you've already seen a later move. <a href="#${seen}" style="color:var(--gold)">Open the latest</a></div>`;
+      else {
+        const same = old.r.every((r,i)=>['c','p','k','b'].every(k=>!r[k] || r[k]===st.r[i][k]));
+        if(!same) notice = `<div class="msg warn">Heads up: earlier rounds in this link differ from the version you saw before.</div>`;
+        store.set(st.id+':last', h);
+      }
+    }catch{ store.set(st.id+':last', h); }
+  } else store.set(st.id+':last', h);
+  S = st; render();
+}
+window.addEventListener('hashchange', load);
+
+function whoseTurn(st){
+  const R=st.r.length, last=st.r[R-1];
+  if(R===0) return 0;
+  if(!last.b) return 1;
+  if(!last.p) return 0;
+  return null; // game over
+}
+
+function viewData(){
+  const lanes = lanesFor(S.s);
+  const secrets = ME===0 ? (store.get(S.id+':secrets')||{}) : {};
+  const entries=[], hidden=[], mine=[];
+  S.r.forEach((rd,i)=>{
+    const round=i+1;
+    const aPlays = rd.p || (ME===0 && secrets[round] ? secrets[round].p : null);
+    if(aPlays && rd.b){
+      strToPlays(aPlays).forEach(p=>entries.push({side:0, ...p, round}));
+      strToPlays(rd.b).forEach(p=>entries.push({side:1, ...p, round}));
+    } else {
+      // one side is sealed/unplayed this round
+      const myStr = ME===0 ? aPlays : rd.b;
+      if(myStr) strToPlays(myStr).forEach(p=>mine.push({side:ME, ...p, round}));
+      if(ME===1 && rd.c && !rd.p) hidden.push(round);
+    }
+  });
+  const used = new Set([...entries, ...mine].filter(e=>e.side===ME).map(e=>e.c));
+  return {lanes, entries, mine, hidden, used, res: resolve(entries, lanes), secrets};
+}
+
+const nameOf = side => esc(S.n[side] || (side===0 ? 'Player 1' : 'Player 2'));
+const YOU = () => nameOf(ME), THEM = () => nameOf(1-ME);
+
+function chip(e, power, cls){
+  const c=CARDS[e.c];
+  return `<div class="chip ${cls}" title="${esc(c.n+(c.t?': '+c.t:''))}"><span>${esc(c.n)} <small>R${e.round}</small></span><span class="pw">${power}</span></div>`;
+}
+
+function render(){
+  const v = viewData(), turn = whoseTurn(S), sc = scoreOf(v.res);
+  const myTurn = turn===ME, over = turn===null;
+  const R = S.r.length;
+  const resolvedRounds = v.entries.length/4;
+  let h = `<h1>DISPATCH</h1><p class="sub">${YOU()} <span style="color:var(--you)">(you)</span> vs ${THEM()} · Round ${Math.min(resolvedRounds+1,ROUNDS)} of ${ROUNDS}</p>`;
+  h += notice;
+  h += `<div class="panel score"><span class="y">${YOU()}: ${sc.pts[ME]} pts</span><span style="color:var(--muted);font-weight:400">lanes held right now</span><span class="t">${THEM()}: ${sc.pts[1-ME]} pts</span></div>`;
+
+  if(over){
+    const [a,b]=[sc.pts[ME],sc.pts[1-ME]], [pa,pb]=[sc.pow[ME],sc.pow[1-ME]];
+    const win = a>b || (a===b && pa>pb), lose = b>a || (a===b && pb>pa);
+    h += `<div class="panel"><div class="big" style="color:${win?'var(--good)':lose?'var(--bad)':'var(--gold)'}">${win?'You win!':lose?THEM()+' wins':'Draw!'}</div>
+      <p style="text-align:center;margin:0">${a} – ${b} points${a===b?` · tiebreak on total power ${pa} – ${pb}`:''}</p></div>`;
+  }
+
+  if(v.hidden.length) h += `<div class="msg">🔒 ${THEM()}'s 2 cards for round ${v.hidden[0]} are sealed. You'll see them once you've both played.</div>`;
+  // board
+  h += `<div class="lanes">`;
+  v.lanes.forEach((lane,L)=>{
+    const r=v.res[L];
+    const theirs=r.here.map((e,i)=>[e,r.power[i]]).filter(([e])=>e.side!==ME);
+    const mineR=r.here.map((e,i)=>[e,r.power[i]]).filter(([e])=>e.side===ME);
+    const lead = r.winner===null ? (r.here.length?'tied':'empty') : (r.winner===ME?'<span style="color:var(--you)">you hold</span>':'<span style="color:var(--them)">they hold</span>');
+    h += `<div class="lane ${armed!==null && myTurn?'armed':''}" data-lane="${L}">
+      <div class="lane-h"><b>${esc(lane.name)}</b><span>★ ${r.value} pt${r.value>1?'s':''}</span></div>
+      <div class="side">${theirs.map(([e,p])=>chip(e,p,'t')).join('')}</div>
+      <div class="tot"><span class="t">${r.tot[1-ME]}</span><span class="y">${r.tot[ME]}</span></div>
+      <div class="side">${mineR.map(([e,p])=>chip(e,p,'y')).join('')}
+        ${v.mine.filter(e=>e.l===L).map(e=>`<div class="chip pend"><span>${esc(CARDS[e.c].n)} <small>R${e.round}</small></span><span>🔒</span></div>`).join('')}
+        ${picks.map((p,i)=>p.l===L?`<div class="chip pend" data-unpick="${i}"><span>${esc(CARDS[p.c].n)}</span><span>✕</span></div>`:'').join('')}</div>
+      <div class="lead">${lead}</div>
+    </div>`;
+  });
+  h += `</div>`;
+
+  // action panel
+  if(shareInfo){
+    h += sharePanel();
+  } else if(over){
+    h += `<div class="panel"><div class="row"><button id="resend" class="ghost">Send final result to ${THEM()}</button><button id="newgame" class="ghost">New game</button></div></div>`;
+  } else if(!myTurn){
+    const waitingFor = turn===0 && R===0 ? 'Waiting for the first move.' : `Waiting for ${THEM()} to play.`;
+    h += `<div class="panel"><h2>${waitingFor}</h2><p class="sub">When they text you their link, open it to continue.</p>
+      <div class="row"><button id="resend" class="ghost">Re-send my last move</button><button id="newgame" class="ghost">New game</button></div></div>`;
+  } else if(ME===0 && R===ROUNDS && S.r[R-1].b){
+    h += `<div class="panel"><h2>Final round is in!</h2><p class="sub">${THEM()} has played round 5. Reveal your sealed cards to finish the game, then send the result.</p>
+      <button id="submit">Reveal &amp; finish</button></div>`;
+  } else {
+    if(ME===0 && R>0 && !v.secrets[R]){
+      h += `<div class="panel msg warn">This device doesn't have your sealed round-${R} cards (did you start the game on another phone or browser?). Open the link on the device you started on.</div>`;
+    }
+    const round = ME===0 ? R+1 : R;
+    const needName = ME===1 && !S.n[1];
+    h += `<div class="panel"><h2>Your move — round ${round}</h2>
+      <p class="sub">Tap a card, then tap a lane. Play ${PER_ROUND} cards (same lane is fine). ${ME===0?`${THEM()} can't see them until they've played too.`:`${THEM()}'s cards for this round are sealed until you lock in.`}</p>
+      ${needName?`<label>Your name</label><input id="myname" maxlength="16" placeholder="Name">`:''}
+      <div class="hand" style="margin-top:10px">${CARDS.map((c,i)=>{
+        const used = v.used.has(i) || picks.some(p=>p.c===i);
+        return `<div class="card ${used?'used':''} ${armed===i?'sel':''}" data-card="${i}"><div class="top"><span>${esc(c.n)}</span><span>${c.p}</span></div><div class="txt">${esc(c.t)}</div></div>`;
+      }).join('')}</div>
+      <div class="row" style="margin-top:12px"><button id="submit" ${picks.length===PER_ROUND?'':'disabled'}>Lock in &amp; send (${picks.length}/${PER_ROUND})</button></div></div>`;
+  }
+
+  h += historyPanel(v) + rulesPanel();
+  $('#app').innerHTML = h;
+  bind();
+}
+
+function historyPanel(v){
+  const lines=[];
+  for(let r=1;r<=ROUNDS;r++){
+    const es=v.entries.filter(e=>e.round===r);
+    if(!es.length) continue;
+    const fmt = side => es.filter(e=>e.side===side).map(e=>`${CARDS[e.c].n}→${v.lanes[e.l].name}`).join(', ');
+    lines.push(`<div><b>R${r}</b> · ${YOU()}: ${fmt(ME)} · ${THEM()}: ${fmt(1-ME)}</div>`);
+  }
+  return lines.length ? `<div class="panel"><details><summary>Round history</summary><div class="log" style="margin-top:8px">${lines.join('')}</div></details></div>` : '';
+}
+
+function rulesPanel(){
+  return `<div class="panel"><details><summary>How to play</summary><ul class="rules">
+    <li>3 lanes, each worth points (★). After 5 rounds, whoever has more total power in a lane wins its points. Most points wins; ties go to total power.</li>
+    <li>Each round, both players secretly play <b>2 cards</b> from the same 12-card hand. You'll play 10 of your 12 cards in total.</li>
+    <li>Moves are sealed: the link carries a lock on the starting player's choice, so nobody can peek before committing.</li>
+    <li>Take your turn, hit <b>Lock in &amp; send</b>, and text the link. Your opponent opens it, plays, and texts one back.</li>
+    <li>Card abilities apply to the whole game, so a Banner played in round 1 boosts cards you add to that lane later.</li>
+  </ul></details></div>`;
+}
+
+function link(){ return location.origin + location.pathname + '#' + encodeState(S); }
+function shareText(){
+  const turn = whoseTurn(S);
+  if(turn===null) return `⚔️ Dispatch — game over! See the final board:`;
+  const rd = S.r.length;
+  return `⚔️ Dispatch — your move (round ${turn===1?rd:rd+1} of ${ROUNDS}):`;
+}
+function sharePanel(){
+  const url = link();
+  return `<div class="panel"><h2>${shareInfo}</h2><p class="sub">Send this link to ${THEM()}. They don't need an account or an app.</p>
+    <div class="row">
+      ${navigator.share?`<button id="share">Share…</button>`:''}
+      <a href="sms:?&body=${encodeURIComponent(shareText()+' '+url)}"><button class="${navigator.share?'ghost':''}">Text it</button></a>
+      <button id="copy" class="ghost">Copy link</button>
+    </div>
+    <label>Link (copy it by hand if the buttons don't work)</label>
+    <textarea readonly id="linkbox">${esc(url)}</textarea></div>`;
+}
+
+function bind(){
+  document.querySelectorAll('[data-card]').forEach(el=>el.onclick=()=>{
+    const i=+el.dataset.card; if(el.classList.contains('used')) return;
+    armed = armed===i ? null : i; render();
+  });
+  document.querySelectorAll('[data-lane]').forEach(el=>el.onclick=()=>{
+    if(armed===null || picks.length>=PER_ROUND) return;
+    picks.push({c:armed, l:+el.dataset.lane}); armed=null; render();
+  });
+  document.querySelectorAll('[data-unpick]').forEach(el=>el.onclick=ev=>{ ev.stopPropagation(); picks.splice(+el.dataset.unpick,1); render(); });
+  const on=(id,fn)=>{ const el=$('#'+id); if(el) el.onclick=fn; };
+  on('submit', submit);
+  on('newgame', ()=>{ location.hash=''; });
+  on('resend', ()=>{ shareInfo = whoseTurn(S)===null ? 'Final result' : 'Your last move'; render(); });
+  on('share', ()=>navigator.share({text: shareText()+' '+link()}).catch(()=>{}));
+  on('copy', async ()=>{
+    try{ await navigator.clipboard.writeText(shareText()+' '+link()); $('#copy').textContent='Copied!'; }
+    catch{ $('#linkbox').select(); }
+  });
+  const nm=$('#myname'); if(nm){ if(draftName===null) draftName=store.get('myname')||''; nm.value=draftName; nm.oninput=()=>draftName=nm.value; }
+}
+
+async function submit(){
+  const st = structuredClone(S), R = st.r.length;
+  if(ME===1){
+    const nm=$('#myname'); if(nm){ const v=nm.value.trim()||'Player 2'; st.n[1]=v.slice(0,16); store.set('myname', st.n[1]); }
+    st.r[R-1].b = playsToStr(picks);
+  } else {
+    const secrets = store.get(st.id+':secrets')||{};
+    if(R>0){
+      const sec = secrets[R];
+      if(!sec){ alert("This device doesn't have your sealed cards for this round."); return; }
+      st.r[R-1].p = sec.p; st.r[R-1].k = sec.k;
+    }
+    if(R<ROUNDS){
+      const p = playsToStr(picks), k = randId(9);
+      secrets[R+1] = {p,k}; store.set(st.id+':secrets', secrets);
+      st.r.push({c: await commitHash(st.id, R+1, p, k)});
+    }
+  }
+  const enc = encodeState(st);
+  store.set(st.id+':last', enc);
+  history.replaceState(null,'','#'+enc);
+  S = st; picks=[]; armed=null; notice='';
+  shareInfo = whoseTurn(S)===null ? 'Game over — send the result' : 'Move locked in!';
+  render();
+}
+
+function renderHome(err){
+  $('#app').innerHTML = `<h1>DISPATCH</h1><p class="sub">A 5-round card duel you play by texting links back and forth.</p>
+    ${err?`<div class="msg warn">${esc(err)}</div>`:''}
+    <div class="panel"><h2>Start a game</h2>
+      <label>Your name</label><input id="nA" maxlength="16" value="${esc(store.get('myname')||'')}" placeholder="Name">
+      <div style="margin-top:12px"><button id="start">Start &amp; make the first move</button></div>
+      <p class="sub" style="margin-top:10px;font-size:13px">Start the game on the phone you'll keep playing on. Your sealed moves are saved in this browser.</p></div>
+    <div class="panel"><h2>Got a link or code?</h2><p class="sub">Usually you just tap the link in your texts. If that doesn't work, paste it here.</p>
+      <textarea id="paste" placeholder="Paste link here"></textarea><div style="margin-top:8px"><button id="open" class="ghost">Open</button></div></div>
+    ${rulesPanel()}`;
+  $('#start').onclick=()=>{
+    const name = $('#nA').value.trim()||'Player 1';
+    store.set('myname', name);
+    const st = {v:1, id: randId(6), s: crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff, n:[name.slice(0,16), ''], r:[]};
+    store.set(st.id+':secrets', {});
+    location.hash = encodeState(st);
+  };
+  $('#open').onclick=()=>{
+    const t=$('#paste').value.trim(); const m=t.match(/#?([A-Za-z0-9_-]{20,})\s*$/);
+    if(m) location.hash=m[1]; else alert("That doesn't look like a Dispatch link.");
+  };
+}
+
+load();
+</script>
+</body>
+</html>
