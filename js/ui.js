@@ -28,11 +28,51 @@ const typeLabel = id => {
 const savedDecks = () => store.get('decks', []);
 const allDecks = () => [...savedDecks().map(d => ({ ...d, mine: true })), ...PRESET_DECKS];
 
+// ---------- engraving ----------
+// Each card gets its own guilloché band and rosette, generated from its id, like the
+// engraved panels on stamps and banknotes.
+const engraved = {};
+// Layered polar rosette: n petals, a finer secondary ripple, four offset rings.
+function rosettePath(b, cx, cy, size, layers = 4) {
+  const n = 7 + (b[5] % 7), m = n * (2 + (b[6] % 2)), depth = 0.2 + (b[7] % 4) * 0.04, ripple = 0.04 + (b[8] % 3) * 0.02;
+  let p = '';
+  for (let L = 0; L < layers; L++) {
+    const scale = 1 - L * 0.13, shift = (L * Math.PI) / n;
+    for (let i = 0; i <= 360; i++) {
+      const t = (i / 360) * Math.PI * 2;
+      const rho = size * scale * (1 - depth + depth * Math.cos(n * t + shift) + ripple * Math.cos(m * t));
+      p += (i ? 'L' : 'M') + (cx + rho * Math.cos(t)).toFixed(1) + ' ' + (cy + rho * Math.sin(t)).toFixed(1);
+    }
+  }
+  return p;
+}
+function engraving(id) {
+  if (engraved[id]) return engraved[id];
+  const b = sha256('engrave|' + id);
+  const f1 = 2 + (b[0] % 3), f2 = 5 + (b[1] % 4), amp = 7 + (b[2] % 5), lines = 6, ph = b[4] / 40;
+  let waves = '';
+  for (let j = 0; j < lines; j++) {
+    let d = '';
+    for (let x = 0; x <= 240; x += 3) {
+      const t = (x / 240) * Math.PI * 2;
+      const y = 20 + Math.sin(t * f1 + j * 0.5 + ph) * amp * (0.65 + 0.35 * Math.cos(t * 2 + j * 0.3)) + Math.sin(t * f2 - j * 0.7) * amp * 0.22;
+      d += (x ? 'L' : 'M') + x + ' ' + y.toFixed(1);
+    }
+    waves += `<path d="${d}"/>`;
+  }
+  const ros = rosettePath(b, 120, 20, 15, 3);
+  engraved[id] = {
+    band: `<svg class="engr" viewBox="0 0 240 40" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><g class="engr-w">${waves}</g><circle class="engr-bg" cx="120" cy="20" r="17"/><path class="engr-r" d="${ros}"/></svg>`,
+    rosette: `<svg class="rosette" viewBox="0 0 40 40" aria-hidden="true"><path d="${rosettePath(b, 20, 20, 18)}"/></svg>`,
+  };
+  return engraved[id];
+}
+
 function pips(n) {
   return `<span class="pips" aria-label="Pitch ${n}">${[0, 1].map(i => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</span>`;
 }
 function cardFace(id, o = {}) {
-  if (id === '?') return `<div class="cf cf-back ${o.cls || ''}" ${o.attrs || ''}><span>Dispatch</span></div>`;
+  if (id === '?') return `<div class="cf cf-back ${o.cls || ''}" ${o.attrs || ''}><span>${engraving('back').rosette}<b>Dispatch</b></span></div>`;
   const C = CARDS[id];
   const cost = o.cost ?? C.cost;
   const stats = C.type === 'unit'
@@ -42,6 +82,7 @@ function cardFace(id, o = {}) {
     <div class="cf-top"><span class="cf-cost${cost !== C.cost ? ' changed' : ''}">${cost}</span>${pips(C.pitch)}</div>
     <div class="cf-name">${esc(C.name)}</div>
     <div class="cf-type">${typeLabel(id)}</div>
+    <div class="cf-band">${engraving(id).band}</div>
     <div class="cf-text">${esc(cardText(id))}</div>
     ${tags}${stats}
   </div>`;
@@ -198,7 +239,8 @@ function renderHome() {
       <span class="chip chip-${cls}">${txt}</span></button></li>`;
   }).join('');
   return `<main class="page home">
-    <h1 class="mast">Dispatch</h1>
+    <div class="airmail-rule" aria-hidden="true"></div>
+    <div class="mast-wrap">${engraving('dispatch').rosette}<h1 class="mast">Dispatch</h1></div>
     <p class="lede">A five-turn card duel you play by text. Take your turn, send the link, wait for theirs.</p>
     <div class="btn-row"><button class="btn primary" data-go="new">New game</button><button class="btn" data-go="decks">Decks</button><button class="btn" data-go="rules">Cards &amp; rules</button></div>
     <section class="block">
@@ -339,6 +381,7 @@ function unitTile(g, st, u, side, ctx) {
   return `<button class="${cls.join(' ')}" data-unit="${u.uid}" aria-label="${esc(name)}, ${u.atk} attack, ${hp} health">
     <span class="ut-name">${esc(name)}</span>
     ${tags.length ? `<span class="ut-tags">${tags.join(' · ')}</span>` : ''}
+    ${known ? engraving(u.fd ? u.sid : u.id).rosette : ''}
     <span class="ut-stats"><b>${u.atk}</b><b class="${u.dmg ? 'hurt' : ''}">${hp}</b></span>
     ${u.fd && !known ? '<span class="ut-q" aria-hidden="true">?</span>' : ''}
   </button>`;
@@ -432,7 +475,7 @@ function renderGame() {
     ${recapHtml}
     ${seat(g, st, 1 - me, ctx)}
     ${boardRow(g, st, 1 - me, ctx)}
-    <div class="midline">${terrain}${my ? `<span class="pool" aria-label="Resources">${st.pool}<small>resources</small></span>` : ''}</div>
+    <div class="midline"><span class="postmark" aria-hidden="true"></span>${terrain}${my ? `<span class="pool" aria-label="Resources">${st.pool}<small>resources</small></span>` : ''}</div>
     ${boardRow(g, st, me, ctx)}
     ${seat(g, st, me, ctx)}
     ${g.spectator ? '' : handHtml(g, st)}
